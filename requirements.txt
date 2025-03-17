@@ -1,0 +1,5 @@
+streamlit
+google-generativeai
+python-dotenv
+PyPdf2  
+db-sqlite3
