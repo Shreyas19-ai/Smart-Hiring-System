@@ -181,31 +181,33 @@ def render_main_app():
 
     st.title("🔍 Skill Gap Analysis & Upskilling Roadmap")
     selected_role = st.selectbox("Select a Job Role:", list(job_roles.keys()))
-    uploaded_file = st.file_uploader("📂 Upload Your Resume (PDF)", type="pdf")
 
-    if uploaded_file:
+    conn, cursor = initialize_db()
+    cursor.execute("SELECT DISTINCT job_role FROM resumes WHERE username = ?", (st.session_state["username"],))
+    applied_roles = [role[0] for role in cursor.fetchall()]
+    conn.close()
+
+    if selected_role in applied_roles:
+        st.warning(f"You have already applied for the '{selected_role}' role. Displaying the previous analysis.")
+
         conn, cursor = initialize_db()
         cursor.execute(
-            "SELECT COUNT(*) FROM resumes WHERE username = ? AND job_role = ?",
+            "SELECT evaluation, match_response, roadmap FROM resumes WHERE username = ? AND job_role = ? ORDER BY id ASC LIMIT 1",
             (st.session_state["username"], selected_role),
         )
-        existing_count = cursor.fetchone()[0]
+        existing_responses = cursor.fetchone()
+        conn.close()
 
-        if existing_count > 0:
-            st.warning(f"You have already uploaded a resume for the '{selected_role}' role. Displaying the previous analysis.")
-            cursor.execute(
-                "SELECT evaluation, match_response, roadmap FROM resumes WHERE username = ? AND job_role = ? ORDER BY id ASC LIMIT 1",
-                (st.session_state["username"], selected_role),
-            )
-            existing_responses = cursor.fetchone()
-
-            if existing_responses:
-                st.session_state["evaluation"] = existing_responses[0]
-                st.session_state["match_response"] = existing_responses[1]
-                st.session_state["roadmap"] = existing_responses[2]
-            else:
-                st.error("Error retrieving existing analysis.")
+        if existing_responses:
+            st.session_state["evaluation"] = existing_responses[0]
+            st.session_state["match_response"] = existing_responses[1]
+            st.session_state["roadmap"] = existing_responses[2]
         else:
+            st.error("Error retrieving existing analysis.")
+    else:
+        uploaded_file = st.file_uploader("📂 Upload Your Resume (PDF)", type="pdf")
+
+        if uploaded_file:
             resume_text = input_pdf_text(uploaded_file)
             st.success("✅ Resume Uploaded Successfully")
 
@@ -215,6 +217,7 @@ def render_main_app():
             with open(file_path, "wb") as f:
                 f.write(uploaded_file.getvalue())
 
+            conn, cursor = initialize_db()
             cursor.execute(
                 "INSERT INTO resumes (username, resume_text, job_role, resume_path) VALUES (?, ?, ?, ?)",
                 (st.session_state["username"], resume_text, selected_role, file_path),
@@ -230,11 +233,39 @@ def render_main_app():
                     JD: {jd}
                 """,
                 "match_response": """
-                    Analyze the resume and job description.
-                    - **Missing Keywords** (Important job-related terms not in the resume)
-                    - **Final Thoughts** (Brief improvement suggestions)
-                    Resume: {text}
-                    JD: {jd}
+                    You are an AI assistant designed to analyze resumes against job descriptions.
+                    Analyze the following resume and job description.
+                    Evaluate the resume based on the following core categories:
+
+                    * Core Skills
+                    * Education
+                    * Industry Experience
+                    * Projects
+
+                    In addition to these core categories, identify 2-3 more categories that are highly relevant to this specific job description. Examples of additional categories include: AI/ML Development, Application of AI/ML, Deployment, Key Strengths, Areas for Focus, Communication Skills, Leadership Experience, Research Experience, etc.
+
+                    For each identified category (both core and additional):
+
+                    1.  Assess the strength of alignment between the resume and the job description for that category.
+                    2.  If the resume demonstrates strong alignment with the job description for the category, precede the category with a checkmark (✔️).
+                    3.  If the resume demonstrates poor alignment with the job description for the category, precede the category with a warning symbol (⚠️).
+                    4.  When determining the Assessment use these guidelines: "Strong" means a very high level of compatibility, "Moderate" means some compatibility, and "Poor" means low or no compatibility.
+
+                    Provide the output in a markdown table format. The table should have four columns: 'Category', 'Job Description Highlights', 'Resume Alignment', and 'Assessment'.
+                    The first row of the table should be the header row with the column names:
+                    For the 'Category' column, list the categories (both core and additional), each preceded by the appropriate symbol (✔️ or ⚠️) as described above.
+
+                    For the 'Job Description Highlights' column, extract key requirements and responsibilities from the job description provided. Keep the descriptions **very brief and to the point**, focusing on the essential keywords. Do not exceed 15 words.
+
+                    For the 'Resume Alignment' column, provide a **concise and descriptive analysis** of how the resume aligns with the corresponding job description highlight. Focus on the key strengths and relevant experience. Keep the descriptions **very brief and to the point**. Do not exceed 15 words.
+
+                    For the 'Assessment' column, use one of these values: 'Strong', 'Good', 'Moderate'.
+                    Here are the inputs:
+
+                    JD:{jd}
+                    Resume:{text}
+
+                    Output the table in markdown format.
                 """,
                 "roadmap": """
                     Suggest a structured learning plan to fill skill gaps.
@@ -264,6 +295,7 @@ def render_main_app():
             conn.commit()
             conn.close()
 
+        # Display results (existing code)
         if "roadmap" in st.session_state and st.session_state["roadmap"] is not None:
             roadmap_parsed = parse_roadmap(st.session_state["roadmap"])
             st.session_state["free_courses"] = roadmap_parsed["free_courses"]
@@ -281,7 +313,37 @@ def render_main_app():
         with tab2:
             st.subheader("📊 Compatibility Score")
             if "match_response" in st.session_state and st.session_state["match_response"] is not None:
-                st.write(st.session_state["match_response"])
+                try:
+                    # Extract the table from the match_response
+                    table_start = st.session_state["match_response"].find("| Category |")
+                    if table_start != -1:
+                        table_markdown = st.session_state["match_response"][table_start:]
+                        # Convert Markdown to CSV-like string for pandas
+                        import io
+                        table_csv = io.StringIO(table_markdown.replace("| ", "|").replace(" |", "|"))
+
+                        df = pd.read_csv(table_csv, sep='|', index_col=False)
+
+                        # Remove unnecessary columns
+                        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+                        df = df.loc[:, ~df.columns.str.contains('Unnamed')]
+
+                        df.dropna(how='all', inplace=True)
+                        if df.iloc[-1].all() == '-':
+                            df = df.iloc[:-1]
+
+                        # Display the table HTML
+                        st.markdown(
+                            df.to_html(index=False, escape=False),
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        st.error("Table not found in Gemini's response.")
+                        st.write(st.session_state["match_response"])
+
+                except Exception as e:
+                    st.error(f"Could not display Compatibility Score in table format: {e}")
+                    st.write(st.session_state["match_response"])
 
         with tab3:
             st.subheader("📚 Learning Pathway")
