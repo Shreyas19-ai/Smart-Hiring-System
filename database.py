@@ -13,6 +13,7 @@ def hash_password(password):
 
 def initialize_db():
     db_file = "users.db"
+    print(f"Database file: {os.path.abspath(db_file)}")
     new_db = not os.path.exists(db_file)
 
     conn = sqlite3.connect(db_file, check_same_thread=False)
@@ -37,7 +38,6 @@ def initialize_db():
                 username TEXT NOT NULL,
                 resume_text TEXT NOT NULL,
                 job_role TEXT NOT NULL,
-                score REAL,
                 evaluation TEXT,
                 match_response TEXT,
                 roadmap TEXT,

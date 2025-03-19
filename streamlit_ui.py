@@ -7,8 +7,11 @@ import sqlite3
 import pandas as pd
 import uuid
 import base64
+import json
+import io
 import os
 from config import job_roles
+import streamlit.components.v1 as components
 
 def render_login():
     st.title("🔑 Login")
@@ -73,22 +76,43 @@ def render_login():
             else:
                 st.error("❌ Invalid Credentials. Try Again!")
 
+def parse_roadmap(roadmap_text):
+    parsed_data = {"missing_skills": [], "free_courses": [], "paid_courses": [], "roadmap_steps": []}
+
+    if roadmap_text is None:
+        return parsed_data
+
+    missing_skills_section = re.search(r"Missing Skills.*?(?=Free Course Links)", roadmap_text, re.DOTALL)
+    if missing_skills_section:
+        parsed_data["missing_skills"] = [skill.strip() for skill in missing_skills_section.group(0).split("\n") if skill.strip()]
+
+    free_courses_section = re.search(r"Free Course Links.*?(?=Paid Course Links)", roadmap_text, re.DOTALL)
+    if free_courses_section:
+        parsed_data["free_courses"] = re.findall(r"\[([^\]]+)\]\((https?://[^\)]+)\)", free_courses_section.group(0))
+
+    paid_courses_section = re.search(r"Paid Course Links.*?(?=Step-by-Step Learning Roadmap)", roadmap_text, re.DOTALL)
+    if paid_courses_section:
+        parsed_data["paid_courses"] = re.findall(r"\[([^\]]+)\]\((https?://[^\)]+)\)", paid_courses_section.group(0))
+
+    roadmap_section = re.search(r"Step-by-Step Learning Roadmap.*", roadmap_text, re.DOTALL)
+    if roadmap_section:
+        parsed_data["roadmap_steps"] = [step.strip() for step in roadmap_section.group(0).split("\n") if step.strip()]
+
+    return parsed_data
+
 
 def render_hr_app():
-    st.sidebar.title(f"Welcome, {st.session_state['username']} (HR) 👋")
+    st.sidebar.title(f"Welcome, {st.session_state['username']} 👋")
     if st.sidebar.button("Logout"):
         st.session_state["logged_in"] = False
         st.session_state["username"] = None
-        st.session_state["user_role"] = None
         st.rerun()
 
-    st.title("HR Resume Screening")
-    conn, cursor = initialize_db()
-    cursor.execute("SELECT DISTINCT job_role FROM resumes")
-    job_roles_list = cursor.fetchall()
-    job_roles_list = [role[0] for role in job_roles_list]
-    conn.close()
+    clear_session_state()
 
+    st.title("HR Dashboard")
+
+    job_roles_list = list(job_roles.keys())
     selected_job_role = st.selectbox("Select Job Role", job_roles_list)
     if st.button("Screen Resumes"):
         clear_cache()
@@ -126,101 +150,39 @@ def render_hr_app():
 
                     new_ranked_resumes.append(result)
 
+
                 st.markdown("---")
                 df = pd.DataFrame(new_ranked_resumes)
                 df = df[["Index", "Name", "Email", "Score", "Resume"]]
                 st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-        else:
-            st.error("Please select a job role.")
+    uploaded_file = st.file_uploader("Upload a Resume (PDF)", type="pdf")
+    selected_role = st.selectbox("Select a Job Role for Analysis:", list(job_roles.keys()))
 
-def parse_roadmap(roadmap_text):
-    parsed_data = {"missing_skills": [], "free_courses": [], "paid_courses": [], "roadmap_steps": []}
+    if uploaded_file:
+        resume_text = input_pdf_text(uploaded_file)
+        st.success("Resume Uploaded Successfully")
 
-    if roadmap_text is None:
-        return parsed_data
-    missing_skills_section = re.search(r"Missing Skills.*?(?=Free Course Links)", roadmap_text, re.DOTALL)
-
-    if missing_skills_section:
-        parsed_data["missing_skills"] = [skill.strip() for skill in missing_skills_section.group(0).split("\n") if skill.strip()]
-    free_courses_section = re.search(r"Free Course Links.*?(?=Paid Course Links)", roadmap_text, re.DOTALL)
-
-    if free_courses_section:
-        parsed_data["free_courses"] = re.findall(r"\[([^\]]+)\]\((https?://[^\)]+)\)", free_courses_section.group(0))
-    paid_courses_section = re.search(r"Paid Course Links.*?(?=Step-by-Step Learning Roadmap)", roadmap_text, re.DOTALL)
-
-    if paid_courses_section:
-        parsed_data["paid_courses"] = re.findall(r"\[([^\]]+)\]\((https?://[^\)]+)\)", paid_courses_section.group(0))
-    roadmap_section = re.search(r"Step-by-Step Learning Roadmap.*", roadmap_text, re.DOTALL)
-
-    if roadmap_section:
-        parsed_data["roadmap_steps"] = [step.strip() for step in roadmap_section.group(0).split("\n") if step.strip()]
-    return parsed_data
-
-def clear_session_state():
-    if "evaluation" in st.session_state:
-        del st.session_state["evaluation"]
-    if "match_response" in st.session_state:
-        del st.session_state["match_response"]
-    if "roadmap" in st.session_state:
-        del st.session_state["roadmap"]
-    if "free_courses" in st.session_state:
-        del st.session_state["free_courses"]
-    if "paid_courses" in st.session_state:
-        del st.session_state["paid_courses"]
-
-
-def render_main_app():
-    st.sidebar.title(f"Welcome, {st.session_state['username']} 👋")
-    if st.sidebar.button("Logout"):
-        st.session_state["logged_in"] = False
-        st.session_state["username"] = None
-        st.rerun()
-
-    clear_session_state()
-
-    st.title("🔍 Skill Gap Analysis & Upskilling Roadmap")
-    selected_role = st.selectbox("Select a Job Role:", list(job_roles.keys()))
-
-    conn, cursor = initialize_db()
-    cursor.execute("SELECT DISTINCT job_role FROM resumes WHERE username = ?", (st.session_state["username"],))
-    applied_roles = [role[0] for role in cursor.fetchall()]
-    conn.close()
-
-    if selected_role in applied_roles:
-        st.warning(f"You have already applied for the '{selected_role}' role. Displaying the previous analysis.")
+        file_name = f"uploaded_resume_{selected_role}.pdf"
+        file_path = os.path.join("resumes", file_name)
+        os.makedirs("resumes", exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getvalue())
 
         conn, cursor = initialize_db()
-        cursor.execute(
-            "SELECT evaluation, match_response, roadmap FROM resumes WHERE username = ? AND job_role = ? ORDER BY id ASC LIMIT 1",
-            (st.session_state["username"], selected_role),
-        )
+        cursor.execute("SELECT evaluation, match_response, roadmap FROM resumes WHERE username = ? AND job_role = ?", ("hr_upload", selected_role))
         existing_responses = cursor.fetchone()
         conn.close()
 
-        if existing_responses:
+        if existing_responses and all(existing_responses):
             st.session_state["evaluation"] = existing_responses[0]
             st.session_state["match_response"] = existing_responses[1]
             st.session_state["roadmap"] = existing_responses[2]
         else:
-            st.error("Error retrieving existing analysis.")
-    else:
-        uploaded_file = st.file_uploader("📂 Upload Your Resume (PDF)", type="pdf")
-
-        if uploaded_file:
-            resume_text = input_pdf_text(uploaded_file)
-            st.success("✅ Resume Uploaded Successfully")
-
-            file_name = f"{st.session_state['username']}_{selected_role}.pdf"
-            file_path = os.path.join("resumes", file_name)
-            os.makedirs("resumes", exist_ok=True)
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getvalue())
-
             conn, cursor = initialize_db()
             cursor.execute(
                 "INSERT INTO resumes (username, resume_text, job_role, resume_path) VALUES (?, ?, ?, ?)",
-                (st.session_state["username"], resume_text, selected_role, file_path),
+                ("hr_upload", resume_text, selected_role, file_path),
             )
 
             input_prompts = {
@@ -288,14 +250,13 @@ def render_main_app():
                     st.session_state["evaluation"],
                     st.session_state["match_response"],
                     st.session_state["roadmap"],
-                    st.session_state["username"],
+                    "hr_upload",
                     selected_role,
                 ),
             )
             conn.commit()
             conn.close()
 
-        # Display results (existing code)
         if "roadmap" in st.session_state and st.session_state["roadmap"] is not None:
             roadmap_parsed = parse_roadmap(st.session_state["roadmap"])
             st.session_state["free_courses"] = roadmap_parsed["free_courses"]
@@ -384,3 +345,73 @@ def render_main_app():
                         st.markdown(f"- [{name}]({link})")
                 else:
                     st.warning("No paid courses found.")
+
+    else:
+        st.error("Please select a job role.")
+
+def clear_session_state():
+    if "evaluation" in st.session_state:
+        del st.session_state["evaluation"]
+    if "match_response" in st.session_state:
+        del st.session_state["match_response"]
+    if "roadmap" in st.session_state:
+        del st.session_state["roadmap"]
+    if "free_courses" in st.session_state:
+        del st.session_state["free_courses"]
+    if "paid_courses" in st.session_state:
+        del st.session_state["paid_courses"]
+
+
+def render_main_app():
+    st.sidebar.title(f"Welcome, {st.session_state['username']} 👋")
+    if st.sidebar.button("Logout"):
+        st.session_state["logged_in"] = False
+        st.session_state["username"] = None
+        st.rerun()
+
+    clear_session_state()
+
+    st.title("Apply for a Job")
+    selected_role = st.selectbox("Select a Job Role:", list(job_roles.keys()))
+
+    conn, cursor = initialize_db()
+    cursor.execute("SELECT job_role FROM resumes WHERE username = ? AND job_role = ?", (st.session_state["username"], selected_role))
+    applied_roles = [role[0] for role in cursor.fetchall()]
+    conn.close()
+
+    if applied_roles:
+        st.warning(f"You have already applied for the '{selected_role}' role.")
+        return
+
+    uploaded_file = st.file_uploader("📂 Upload Your Resume (PDF)", type="pdf")
+
+    if uploaded_file:
+        resume_text = input_pdf_text(uploaded_file)
+        st.success("✅ Resume Uploaded Successfully")
+
+        file_name = f"{st.session_state['username']}_{selected_role}.pdf"
+        file_path = os.path.join("resumes", file_name)
+        os.makedirs("resumes", exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getvalue())
+
+        conn, cursor = initialize_db()
+        cursor.execute(
+            "INSERT INTO resumes (username, resume_text, job_role, resume_path) VALUES (?, ?, ?, ?)",
+            (st.session_state["username"], resume_text, selected_role, file_path),
+        )
+
+        cursor.execute(
+            "UPDATE resumes SET evaluation = ?, match_response = ?, roadmap = ? WHERE id = (SELECT MAX(id) FROM resumes WHERE username = ? AND job_role = ?)",
+            (
+                None,  # Set evaluation to None
+                None,  # Set match_response to None
+                None,  # Set roadmap to None
+                st.session_state["username"],
+                selected_role,
+            ),
+        )
+
+        print("render_main_app - Database update executed")
+        conn.commit()
+        conn.close()
