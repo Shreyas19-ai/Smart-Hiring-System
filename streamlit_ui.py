@@ -11,7 +11,6 @@ import json
 import io
 import os
 from config import job_roles
-import streamlit.components.v1 as components
 
 def render_login():
     st.title("🔑 Login")
@@ -114,240 +113,225 @@ def render_hr_app():
 
     job_roles_list = list(job_roles.keys())
     selected_job_role = st.selectbox("Select Job Role", job_roles_list)
-    if st.button("Screen Resumes"):
-        clear_cache()
-        if selected_job_role:
-            with st.spinner("Processing Resumes..."):
-                ranked_resumes = process_bulk_resumes(selected_job_role)  # Call directly
 
-                new_ranked_resumes = []
-                for i, result in enumerate(ranked_resumes):
-                    result["Index"] = i + 1
-                    result["Email"] = f'<a href="mailto:{result["Email"]}">{result["Email"]}</a>'
+    if selected_job_role:
+        action = st.radio("Choose an action:", ("Screen Resumes", "View Analysis"))
 
-                    if result["Resume Path"]:
-                        print(f"Checking for file: {result['Resume Path']}")
-                        absolute_path = os.path.abspath(result["Resume Path"])
-                        print(f"Absolute path: {absolute_path}")
-                        if os.path.exists(absolute_path):
-                            print("File exists.")
-                            try:
-                                with open(absolute_path, "rb") as f:
-                                    b64 = base64.b64encode(f.read()).decode()
-                                result["Resume"] = f'<a href="data:application/octet-stream;base64,{b64}" download="resume_{result["Name"]}.pdf">📝</a>'
-                            except FileNotFoundError:
-                                print("FileNotFoundError occurred.")
+        if action == "Screen Resumes":
+            if st.button("Start Screening"):
+                clear_cache()
+                with st.spinner("Processing Resumes..."):
+                    ranked_resumes = process_bulk_resumes(selected_job_role)
+                    new_ranked_resumes = []
+                    for i, result in enumerate(ranked_resumes):
+                        result["Index"] = i + 1
+                        result["Email"] = f'<a href="mailto:{result["Email"]}">{result["Email"]}</a>'
+
+                        if result["Resume Path"]:
+                            absolute_path = os.path.abspath(result["Resume Path"])
+                            if os.path.exists(absolute_path):
+                                try:
+                                    with open(absolute_path, "rb") as f:
+                                        b64 = base64.b64encode(f.read()).decode()
+                                    result["Resume"] = f'<a href="data:application/octet-stream;base64,{b64}" download="resume_{result["Name"]}.pdf">📝</a>'
+                                except FileNotFoundError:
+                                    result["Resume"] = "File not found"
+                                except Exception as e:
+                                    result["Resume"] = f"Error: {e}"
+                            else:
                                 result["Resume"] = "File not found"
-                            except Exception as e:
-                                print(f"An error occurred: {e}")
-                                result["Resume"] = f"Error: {e}"
                         else:
-                            print("File does not exist.")
-                            result["Resume"] = "File not found"  # Or handle this case differently
-                    else:
-                        print("Resume Path is empty.")
-                        result["Resume"] = "Resume path not available"
+                            result["Resume"] = "Resume path not available"
 
-                    new_ranked_resumes.append(result)
+                        new_ranked_resumes.append(result)
 
+                    st.markdown("---")
+                    df = pd.DataFrame(new_ranked_resumes)
+                    df = df[["Index", "Name", "Email", "Score", "Resume"]]
+                    st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-                st.markdown("---")
-                df = pd.DataFrame(new_ranked_resumes)
-                df = df[["Index", "Name", "Email", "Score", "Resume"]]
-                st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
+        elif action == "View Analysis":
+            uploaded_file = st.file_uploader("Upload a Resume (PDF)", type="pdf")
 
-    uploaded_file = st.file_uploader("Upload a Resume (PDF)", type="pdf")
-    selected_role = st.selectbox("Select a Job Role for Analysis:", list(job_roles.keys()))
+            if uploaded_file:
+                resume_text = input_pdf_text(uploaded_file)
+                st.success("Resume Uploaded Successfully")
 
-    if uploaded_file:
-        resume_text = input_pdf_text(uploaded_file)
-        st.success("Resume Uploaded Successfully")
+                file_name = f"uploaded_resume_{selected_job_role}.pdf"
+                file_path = os.path.join("resumes", file_name)
+                os.makedirs("resumes", exist_ok=True)
+                with open(file_path, "wb") as f:
+                    f.write(uploaded_file.getvalue())
 
-        file_name = f"uploaded_resume_{selected_role}.pdf"
-        file_path = os.path.join("resumes", file_name)
-        os.makedirs("resumes", exist_ok=True)
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getvalue())
+                conn, cursor = initialize_db()
+                cursor.execute(
+                    "INSERT INTO resumes (username, resume_text, job_role, resume_path) VALUES (?, ?, ?, ?)",
+                    ("hr_upload", resume_text, selected_job_role, file_path),
+                )
 
-        conn, cursor = initialize_db()
-        cursor.execute("SELECT evaluation, match_response, roadmap FROM resumes WHERE username = ? AND job_role = ?", ("hr_upload", selected_role))
-        existing_responses = cursor.fetchone()
-        conn.close()
+                input_prompts = {
+                        "evaluation": """
+                            Evaluate the resume against the job description.
+                            - **Strengths** (Highlight relevant skills)
+                            - **Weaknesses** (List missing skills)
+                            - **Overall Fit Summary** (Concise job match evaluation)
+                            Resume: {text}
+                            JD: {jd}
+                        """,
+                        "match_response": """
+                            You are an AI assistant designed to analyze resumes against job descriptions.
+                            Analyze the following resume and job description.
+                            Evaluate the resume based on the following core categories:
 
-        if existing_responses and all(existing_responses):
-            st.session_state["evaluation"] = existing_responses[0]
-            st.session_state["match_response"] = existing_responses[1]
-            st.session_state["roadmap"] = existing_responses[2]
+                            * Core Skills
+                            * Education
+                            * Industry Experience
+                            * Projects
+
+                            In addition to these core categories, identify 2-3 more categories that are highly relevant to this specific job description. Examples of additional categories include: AI/ML Development, Application of AI/ML, Deployment, Key Strengths, Areas for Focus, Communication Skills, Leadership Experience, Research Experience, etc.
+
+                            For each identified category (both core and additional):
+
+                            1. Assess the strength of alignment between the resume and the job description for that category.
+                            2. If the resume demonstrates strong alignment with the job description for the category, precede the category with a checkmark (✔️).
+                            3. If the resume demonstrates poor alignment with the job description for the category, precede the category with a warning symbol (⚠️).
+                            4. When determining the Assessment use these guidelines: "Strong" means a very high level of compatibility, "Moderate" means some compatibility, and "Poor" means low or no compatibility.
+
+                            Provide the output in a markdown table format. The table should have four columns: 'Category', 'Job Description Highlights', 'Resume Alignment', and 'Assessment'.
+                            The first row of the table should be the header row with the column names:
+                            For the 'Category' column, list the categories (both core and additional), each preceded by the appropriate symbol (✔️ or ⚠️) as described above.
+
+                            For the 'Job Description Highlights' column, extract key requirements and responsibilities from the job description provided. Keep the descriptions **very brief and to the point**, focusing on the essential keywords. Do not exceed 15 words.
+
+                            For the 'Resume Alignment' column, provide a **concise and descriptive analysis** of how the resume aligns with the corresponding job description highlight. Focus on the key strengths and relevant experience. Keep the descriptions **very brief and to the point**. Do not exceed 15 words.
+
+                            For the 'Assessment' column, use one of these values: 'Strong', 'Good', 'Moderate'.
+                            Here are the inputs:
+
+                            JD:{jd}
+                            Resume:{text}
+
+                            Output the table in markdown format.
+                        """,
+                        "roadmap": """
+                            Suggest a structured learning plan to fill skill gaps.
+                            - **Missing Skills** (List only key missing skills)
+                            - **Free Course Links** (For each missing skill and its link and name only, no description)
+                            - **Paid Course Links** (For each missing skill and its link and name only, no description)
+                            - **Step-by-Step Learning Roadmap** - Mention learning steps **along with estimated time required (in weeks/months)**
+                            Resume: {text}
+                            JD: {jd}
+                        """,
+                    }
+
+                for key in input_prompts:
+                    prompt = input_prompts[key].format(text=resume_text, jd=job_roles[selected_job_role])
+                    st.session_state[key] = get_gemini_response(prompt, resume_text, job_roles[selected_job_role])
+
+                cursor.execute(
+                    "UPDATE resumes SET evaluation = ?, match_response = ?, roadmap = ? WHERE id = (SELECT MAX(id) FROM resumes WHERE username = ? AND job_role = ?)",
+                    (
+                        st.session_state["evaluation"],
+                        st.session_state["match_response"],
+                        st.session_state["roadmap"],
+                        "hr_upload",
+                        selected_job_role,
+                    ),
+                )
+                conn.commit()
+                conn.close()
+
+                if "roadmap" in st.session_state and st.session_state["roadmap"] is not None:
+                    roadmap_parsed = parse_roadmap(st.session_state["roadmap"])
+                    st.session_state["free_courses"] = roadmap_parsed["free_courses"]
+                    st.session_state["paid_courses"] = roadmap_parsed["paid_courses"]
+                else:
+                    roadmap_parsed = {"missing_skills": [], "free_courses": [], "paid_courses": [], "roadmap_steps": []}
+
+                tab1, tab2, tab3, tab4 = st.tabs(["📋 User Persona", "📊 Compatibility Score", "📚 Learning Pathway", "📈 Progress Tracking"])
+
+                with tab1:
+                    st.subheader("📝 User Persona")
+                    if "evaluation" in st.session_state and st.session_state["evaluation"] is not None:
+                        st.write(st.session_state["evaluation"])
+
+                with tab2:
+                    st.subheader("📊 Compatibility Score")
+                    if "match_response" in st.session_state and st.session_state["match_response"] is not None:
+                        try:
+                            # Extract the table from the match_response
+                            table_start = st.session_state["match_response"].find("| Category |")
+                            if table_start != -1:
+                                table_markdown = st.session_state["match_response"][table_start:]
+                                # Convert Markdown to CSV-like string for pandas
+                                import io
+                                table_csv = io.StringIO(table_markdown.replace("| ", "|").replace(" |", "|"))
+
+                                df = pd.read_csv(table_csv, sep='|', index_col=False)
+
+                                # Remove unnecessary columns
+                                df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+                                df = df.loc[:, ~df.columns.str.contains('Unnamed')]
+
+                                df.dropna(how='all', inplace=True)
+                                if df.iloc[-1].all() == '-':
+                                    df = df.iloc[:-1]
+
+                                # Display the table HTML
+                                st.markdown(
+                                    df.to_html(index=False, escape=False),
+                                    unsafe_allow_html=True,
+                                )
+                            else:
+                                st.error("Table not found in Gemini's response.")
+                                st.write(st.session_state["match_response"])
+
+                        except Exception as e:
+                            st.error(f"Could not display Compatibility Score in table format: {e}")
+                            st.write(st.session_state["match_response"])
+
+                with tab3:
+                    st.subheader("📚 Learning Pathway")
+
+                    # Collapsible Section: Missing Skills
+                    with st.expander("🔍 Missing Skills"):
+                        if roadmap_parsed["missing_skills"]:
+                            st.write("Here are the key skills you need to focus on:")
+                            for skill in roadmap_parsed["missing_skills"]:
+                                st.write(f"- {skill}")
+                        else:
+                            st.warning("No missing skills identified.")
+
+                    # Collapsible Section: Step-by-Step Roadmap
+                    with st.expander("🗺️ Step-by-Step Learning Roadmap"):
+                        if roadmap_parsed["roadmap_steps"]:
+                            st.write("Follow this structured plan to upskill effectively:")
+                            for step in roadmap_parsed["roadmap_steps"]:
+                                st.write(f"- {step}")
+                        else:
+                            st.warning("No roadmap steps found.")
+
+                with tab4:
+                    # Collapsible Section: Free Courses
+                    with st.expander("🎓 Free Course Links"):
+                        if roadmap_parsed["free_courses"]:
+                            st.write("Here are some free resources to get started:")
+                            for name, link in roadmap_parsed["free_courses"]:
+                                st.markdown(f"- [{name}]({link})")
+                        else:
+                            st.warning("No free courses found.")
+
+                    # Collapsible Section: Paid Courses
+                    with st.expander("💳 Paid Course Links"):
+                        if roadmap_parsed["paid_courses"]:
+                            st.write("Here are some paid resources for deeper learning:")
+                            for name, link in roadmap_parsed["paid_courses"]:
+                                st.markdown(f"- [{name}]({link})")
+                        else:
+                            st.warning("No paid courses found.")
+
         else:
-            conn, cursor = initialize_db()
-            cursor.execute(
-                "INSERT INTO resumes (username, resume_text, job_role, resume_path) VALUES (?, ?, ?, ?)",
-                ("hr_upload", resume_text, selected_role, file_path),
-            )
-
-            input_prompts = {
-                "evaluation": """
-                    Evaluate the resume against the job description.
-                    - **Strengths** (Highlight relevant skills)
-                    - **Weaknesses** (List missing skills)
-                    - **Overall Fit Summary** (Concise job match evaluation)
-                    Resume: {text}
-                    JD: {jd}
-                """,
-                "match_response": """
-                    You are an AI assistant designed to analyze resumes against job descriptions.
-                    Analyze the following resume and job description.
-                    Evaluate the resume based on the following core categories:
-
-                    * Core Skills
-                    * Education
-                    * Industry Experience
-                    * Projects
-
-                    In addition to these core categories, identify 2-3 more categories that are highly relevant to this specific job description. Examples of additional categories include: AI/ML Development, Application of AI/ML, Deployment, Key Strengths, Areas for Focus, Communication Skills, Leadership Experience, Research Experience, etc.
-
-                    For each identified category (both core and additional):
-
-                    1.  Assess the strength of alignment between the resume and the job description for that category.
-                    2.  If the resume demonstrates strong alignment with the job description for the category, precede the category with a checkmark (✔️).
-                    3.  If the resume demonstrates poor alignment with the job description for the category, precede the category with a warning symbol (⚠️).
-                    4.  When determining the Assessment use these guidelines: "Strong" means a very high level of compatibility, "Moderate" means some compatibility, and "Poor" means low or no compatibility.
-
-                    Provide the output in a markdown table format. The table should have four columns: 'Category', 'Job Description Highlights', 'Resume Alignment', and 'Assessment'.
-                    The first row of the table should be the header row with the column names:
-                    For the 'Category' column, list the categories (both core and additional), each preceded by the appropriate symbol (✔️ or ⚠️) as described above.
-
-                    For the 'Job Description Highlights' column, extract key requirements and responsibilities from the job description provided. Keep the descriptions **very brief and to the point**, focusing on the essential keywords. Do not exceed 15 words.
-
-                    For the 'Resume Alignment' column, provide a **concise and descriptive analysis** of how the resume aligns with the corresponding job description highlight. Focus on the key strengths and relevant experience. Keep the descriptions **very brief and to the point**. Do not exceed 15 words.
-
-                    For the 'Assessment' column, use one of these values: 'Strong', 'Good', 'Moderate'.
-                    Here are the inputs:
-
-                    JD:{jd}
-                    Resume:{text}
-
-                    Output the table in markdown format.
-                """,
-                "roadmap": """
-                    Suggest a structured learning plan to fill skill gaps.
-                    - **Missing Skills** (List only key missing skills)
-                    - **Free Course Links** (For each missing skill and its link and name only, no description)
-                    - **Paid Course Links** (For each missing skill and its link and name only, no description)
-                    - **Step-by-Step Learning Roadmap** - Mention learning steps **along with estimated time required (in weeks/months)**
-                    Resume: {text}
-                    JD: {jd}
-                """,
-            }
-
-            for key in input_prompts:
-                prompt = input_prompts[key].format(text=resume_text, jd=job_roles[selected_role])
-                st.session_state[key] = get_gemini_response(prompt, resume_text, job_roles[selected_role])
-
-            cursor.execute(
-                "UPDATE resumes SET evaluation = ?, match_response = ?, roadmap = ? WHERE id = (SELECT MAX(id) FROM resumes WHERE username = ? AND job_role = ?)",
-                (
-                    st.session_state["evaluation"],
-                    st.session_state["match_response"],
-                    st.session_state["roadmap"],
-                    "hr_upload",
-                    selected_role,
-                ),
-            )
-            conn.commit()
-            conn.close()
-
-        if "roadmap" in st.session_state and st.session_state["roadmap"] is not None:
-            roadmap_parsed = parse_roadmap(st.session_state["roadmap"])
-            st.session_state["free_courses"] = roadmap_parsed["free_courses"]
-            st.session_state["paid_courses"] = roadmap_parsed["paid_courses"]
-        else:
-            roadmap_parsed = {"missing_skills": [], "free_courses": [], "paid_courses": [], "roadmap_steps": []}
-
-        tab1, tab2, tab3, tab4 = st.tabs(["📋 User Persona", "📊 Compatibility Score", "📚 Learning Pathway", "📈 Progress Tracking"])
-
-        with tab1:
-            st.subheader("📝 User Persona")
-            if "evaluation" in st.session_state and st.session_state["evaluation"] is not None:
-                st.write(st.session_state["evaluation"])
-
-        with tab2:
-            st.subheader("📊 Compatibility Score")
-            if "match_response" in st.session_state and st.session_state["match_response"] is not None:
-                try:
-                    # Extract the table from the match_response
-                    table_start = st.session_state["match_response"].find("| Category |")
-                    if table_start != -1:
-                        table_markdown = st.session_state["match_response"][table_start:]
-                        # Convert Markdown to CSV-like string for pandas
-                        import io
-                        table_csv = io.StringIO(table_markdown.replace("| ", "|").replace(" |", "|"))
-
-                        df = pd.read_csv(table_csv, sep='|', index_col=False)
-
-                        # Remove unnecessary columns
-                        df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
-                        df = df.loc[:, ~df.columns.str.contains('Unnamed')]
-
-                        df.dropna(how='all', inplace=True)
-                        if df.iloc[-1].all() == '-':
-                            df = df.iloc[:-1]
-
-                        # Display the table HTML
-                        st.markdown(
-                            df.to_html(index=False, escape=False),
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        st.error("Table not found in Gemini's response.")
-                        st.write(st.session_state["match_response"])
-
-                except Exception as e:
-                    st.error(f"Could not display Compatibility Score in table format: {e}")
-                    st.write(st.session_state["match_response"])
-
-        with tab3:
-            st.subheader("📚 Learning Pathway")
-
-            # Collapsible Section: Missing Skills
-            with st.expander("🔍 Missing Skills"):
-                if roadmap_parsed["missing_skills"]:
-                    st.write("Here are the key skills you need to focus on:")
-                    for skill in roadmap_parsed["missing_skills"]:
-                        st.write(f"- {skill}")
-                else:
-                    st.warning("No missing skills identified.")
-
-            # Collapsible Section: Step-by-Step Roadmap
-            with st.expander("🗺️ Step-by-Step Learning Roadmap"):
-                if roadmap_parsed["roadmap_steps"]:
-                    st.write("Follow this structured plan to upskill effectively:")
-                    for step in roadmap_parsed["roadmap_steps"]:
-                        st.write(f"- {step}")
-                else:
-                    st.warning("No roadmap steps found.")
-
-        with tab4:
-            # Collapsible Section: Free Courses
-            with st.expander("🎓 Free Course Links"):
-                if roadmap_parsed["free_courses"]:
-                    st.write("Here are some free resources to get started:")
-                    for name, link in roadmap_parsed["free_courses"]:
-                        st.markdown(f"- [{name}]({link})")
-                else:
-                    st.warning("No free courses found.")
-
-            # Collapsible Section: Paid Courses
-            with st.expander("💳 Paid Course Links"):
-                if roadmap_parsed["paid_courses"]:
-                    st.write("Here are some paid resources for deeper learning:")
-                    for name, link in roadmap_parsed["paid_courses"]:
-                        st.markdown(f"- [{name}]({link})")
-                else:
-                    st.warning("No paid courses found.")
-
-    else:
-        st.error("Please select a job role.")
+            st.error("Please select a job role.")
 
 def clear_session_state():
     if "evaluation" in st.session_state:
@@ -404,9 +388,9 @@ def render_main_app():
         cursor.execute(
             "UPDATE resumes SET evaluation = ?, match_response = ?, roadmap = ? WHERE id = (SELECT MAX(id) FROM resumes WHERE username = ? AND job_role = ?)",
             (
-                None,  # Set evaluation to None
-                None,  # Set match_response to None
-                None,  # Set roadmap to None
+                None,  
+                None,  
+                None,  
                 st.session_state["username"],
                 selected_role,
             ),
