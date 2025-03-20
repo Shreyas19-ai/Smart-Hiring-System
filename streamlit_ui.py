@@ -171,10 +171,57 @@ def render_hr_app():
 
                 input_prompts = {
                         "evaluation": """
-                            Evaluate the resume against the job description.
-                            - **Strengths** (Highlight relevant skills)
-                            - **Weaknesses** (List missing skills)
-                            - **Overall Fit Summary** (Concise job match evaluation)
+                            You are an HR analyst tasked with creating a user persona from a resume. Analyze the provided resume and output the persona in a table format.
+
+                            The table should have two columns: "Category" and "Details".
+
+                            The "Category" column must include the following rows:
+
+                            * Name
+                            * Profession
+                            * Education
+                            * Key Strengths
+                            * Areas for Development
+                            * Technical Skills
+                            * Relevant Experience
+                            * Achievements
+                            * Certifications
+
+                            The "Details" column should contain the corresponding information extracted from the resume, formatted as follows:
+
+                            * **Name:** The full name of the candidate.
+                            * **Profession:** The candidate's current profession (e.g., student, software engineer).
+                            * **Education:** The candidate's educational qualifications (degrees, institutions, and dates).
+                            * **Key Strengths:** A concise summary of the candidate's core skills and abilities. Use bullet points for each strength. **Keep descriptions very brief and to the point (no more than 3-5 words per bullet point).**
+                            * **Areas for Development:** Potential areas where the candidate could grow or needs more experience. Use bullet points. **Keep descriptions very brief and to the point (no more than 3-5 words per bullet point).**
+                            * **Technical Skills:** A list of technical skills, including programming languages, frameworks, tools, etc.
+                            * **Relevant Experience:** A concise summary of the candidate's work history, projects, and internships. Use bullet points to list each experience. **Summarize each experience in no more than 5-7 words.**
+                            * **Achievements:** Notable accomplishments and awards. Use bullet points. **Summarize each achievement in no more than 5-7 words.**
+                            * **Certifications:** List of certifications. Use bullet points. **Summarize each certification in no more than 5-7 words.**
+
+                            Formatting and Style Guidelines:
+
+                            * The output must be in a table format.
+                            * Do not include any HTML tags or special characters.
+                            * Use concise language.
+                            * Extract information directly from the resume. Do not add any external information or make assumptions.
+
+                            Example Output Format:
+
+                            | Category | Details |
+                            |---|---|
+                            | Name | \[Full Name] |
+                            | Profession | \[Profession] |
+                            | Education | \[Education Details] |
+                            | Key Strengths | \* \[Strength 1] <br> \* \[Strength 2] |
+                            | Areas for Development | \* \[Development Area 1] <br> \* \[Development Area 2] |
+                            | Technical Skills | \[List of Skills] |
+                            | Relevant Experience | \* \[Experience 1] <br> \* \[Experience 2] |
+                            | Achievements | \* \[Achievement 1] <br> \* \[Achievement 2] |
+                            | Certifications | \* \[Certification 1] <br> \* \[Certification 2] |
+
+                            Here are the inputs:
+
                             Resume: {text}
                             JD: {jd}
                         """,
@@ -253,8 +300,37 @@ def render_hr_app():
                 with tab1:
                     st.subheader("📝 User Persona")
                     if "evaluation" in st.session_state and st.session_state["evaluation"] is not None:
-                        st.write(st.session_state["evaluation"])
+                        try:
+                            # Extract the table from the evaluation response
+                            table_start = st.session_state["evaluation"].find("| Category |")
+                            if table_start != -1:
+                                table_markdown = st.session_state["evaluation"][table_start:]
+                                # Convert Markdown to CSV-like string for pandas
+                                import io
+                                table_csv = io.StringIO(table_markdown.replace("| ", "|").replace(" |", "|"))
 
+                                df = pd.read_csv(table_csv, sep='|', index_col=False)
+
+                                # Remove unnecessary columns
+                                df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+                                df = df.loc[:, ~df.columns.str.contains('Unnamed')]
+
+                                df.dropna(how='all', inplace=True)
+                                if df.iloc[-1].all() == '-':
+                                    df = df.iloc[:-1]
+
+                                # Display the table HTML
+                                st.markdown(
+                                    df.to_html(index=False, escape=False),
+                                    unsafe_allow_html=True,
+                                )
+                            else:
+                                st.error("Table not found in Gemini's response.")
+                                st.write(st.session_state["evaluation"])
+
+                        except Exception as e:
+                            st.error(f"Could not display User Persona in table format: {e}")
+                            st.write(st.session_state["evaluation"])
                 with tab2:
                     st.subheader("📊 Compatibility Score")
                     if "match_response" in st.session_state and st.session_state["match_response"] is not None:
