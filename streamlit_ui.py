@@ -122,6 +122,11 @@ def render_hr_app():
                 clear_cache()
                 with st.spinner("Processing Resumes..."):
                     ranked_resumes = process_bulk_resumes(selected_job_role)
+
+                    if not ranked_resumes:  # Check if no resumes found
+                        st.warning(f"No candidates have applied for the '{selected_job_role}' job role yet.")
+                        return
+                    
                     new_ranked_resumes = []
                     for i, result in enumerate(ranked_resumes):
                         result["Index"] = i + 1
