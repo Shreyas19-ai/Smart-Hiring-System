@@ -94,6 +94,30 @@ def extract_score_from_response(response):
             return 0
     except Exception as e:
         return 0
+    
+def parse_roadmap(roadmap_text):
+    parsed_data = {"missing_skills": [], "free_courses": [], "paid_courses": [], "roadmap_steps": []}
+
+    if roadmap_text is None:
+        return parsed_data
+
+    missing_skills_section = re.search(r"Missing Skills.*?(?=Free Course Links)", roadmap_text, re.DOTALL)
+    if missing_skills_section:
+        parsed_data["missing_skills"] = [skill.strip() for skill in missing_skills_section.group(0).split("\n") if skill.strip()]
+
+    free_courses_section = re.search(r"Free Course Links.*?(?=Paid Course Links)", roadmap_text, re.DOTALL)
+    if free_courses_section:
+        parsed_data["free_courses"] = re.findall(r"\[([^\]]+)\]\((https?://[^\)]+)\)", free_courses_section.group(0))
+
+    paid_courses_section = re.search(r"Paid Course Links.*?(?=Step-by-Step Learning Roadmap)", roadmap_text, re.DOTALL)
+    if paid_courses_section:
+        parsed_data["paid_courses"] = re.findall(r"\[([^\]]+)\]\((https?://[^\)]+)\)", paid_courses_section.group(0))
+
+    roadmap_section = re.search(r"Step-by-Step Learning Roadmap.*", roadmap_text, re.DOTALL)
+    if roadmap_section:
+        parsed_data["roadmap_steps"] = [step.strip() for step in roadmap_section.group(0).split("\n") if step.strip()]
+
+    return parsed_data
 
 def clear_cache():
     process_bulk_resumes.clear()
