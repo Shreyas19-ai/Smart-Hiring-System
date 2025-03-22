@@ -82,19 +82,43 @@ class HRUI:
 
     def handle_view_analysis(self):
         self.render_candidate_selection()
-        self.render_analysis_display()
+        if hasattr(self, 'selected_username') and self.selected_username:  # Check if a candidate is selected
+            self.render_analysis_display()
 
     def render_candidate_selection(self):
         if self.selected_job_role:
             conn, cursor = initialize_db()
-            cursor.execute("SELECT username FROM resumes WHERE job_role = ?", (self.selected_job_role,))
-            usernames = [row[0] for row in cursor.fetchall()]
+            cursor.execute("SELECT username, evaluation FROM resumes WHERE job_role = ?", (self.selected_job_role,))
+            results = cursor.fetchall()
             conn.close()
 
-            if usernames:
-                self.selected_username = st.selectbox("Select Candidate", usernames)
+            candidate_data = []
+            if results:
+                for username, evaluation in results:
+                    if evaluation:
+                        name_match = re.search(r"Name:\s*(.+)", evaluation)
+                        if name_match:
+                            candidate_data.append((name_match.group(1).strip(), username))
+                        else:
+                            candidate_data.append((username, username))  # Fallback to username
+                    else:
+                        candidate_data.append((username, username))  # Fallback to username
+
+                if candidate_data:
+                    candidate_names, usernames = zip(*candidate_data)
+                    self.candidate_names = candidate_names
+                    self.usernames = usernames
+
+                    self.selected_candidate_name = st.selectbox("Select Candidate", candidate_names, index=None, placeholder="Select Candidate")
+
+                    if st.button("View Analysis"):
+                        if self.selected_candidate_name:
+                            self.selected_username = usernames[candidate_names.index(self.selected_candidate_name)]
+                        else:
+                            st.warning("Please select a candidate.")
+                else:
+                    st.warning(f"No candidates have applied for the '{self.selected_job_role}' role yet.")
             else:
-                self.selected_username = None
                 st.warning(f"No candidates have applied for the '{self.selected_job_role}' role yet.")
         else:
             self.selected_username = None
@@ -119,8 +143,7 @@ class HRUI:
                 self.display_analysis_tabs(roadmap_parsed)
             else:
                 st.error("Could not retrieve analysis.")
-
-
+                
     def display_analysis_tabs(self, roadmap_parsed):
         tab1, tab2, tab3, tab4 = st.tabs(["📋 User Persona", "📊 Compatibility Score", "📚 Learning Pathway", "📈 Progress Tracking"])
 
