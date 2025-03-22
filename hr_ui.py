@@ -7,7 +7,7 @@ import base64
 
 from database import initialize_db
 from pdf_processor import input_pdf_text
-from ai_response import get_gemini_response, parse_roadmap, process_bulk_resumes # import the function
+from ai_response import get_gemini_response, parse_roadmap, process_bulk_resumes
 from config import job_roles
 
 class HRUI:
@@ -18,7 +18,7 @@ class HRUI:
         self.render_sidebar()
         self.render_dashboard_title()
         self.render_job_role_selection()
-        self.render_action_selection()
+        self.render_actions()
 
     def render_sidebar(self):
         st.sidebar.title(f"Welcome, {self.session_state['username']} 👋")
@@ -34,15 +34,13 @@ class HRUI:
         job_roles_list = list(job_roles.keys())
         self.selected_job_role = st.selectbox("Select Job Role", job_roles_list)
 
-    def render_action_selection(self):
-        if self.selected_job_role:
-            self.action = st.radio("Choose an action:", ("Screen Resumes", "View Analysis"))
-            if self.action == "Screen Resumes":
-                self.handle_screen_resumes()
-            elif self.action == "View Analysis":
-                self.handle_view_analysis()
-        else:
-            st.error("Please select a job role.")
+    def render_actions(self):
+        action = st.radio("Select Action", ["Screen Resumes", "View Analysis"])
+
+        if action == "Screen Resumes":
+            self.handle_screen_resumes()
+        elif action == "View Analysis":
+            self.handle_view_analysis()
 
     def handle_screen_resumes(self):
         if st.button("Start Screening"):
@@ -83,151 +81,45 @@ class HRUI:
                 st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
 
     def handle_view_analysis(self):
-        uploaded_file = st.file_uploader("Upload a Resume (PDF)", type="pdf")
+        self.render_candidate_selection()
+        self.render_analysis_display()
 
-        if uploaded_file:
-            resume_text = input_pdf_text(uploaded_file)
-            st.success("Resume Uploaded Successfully")
-
-            file_name = f"uploaded_resume_{self.selected_job_role}.pdf"
-            file_path = os.path.join("resumes", file_name)
-            os.makedirs("resumes", exist_ok=True)
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getvalue())
-
+    def render_candidate_selection(self):
+        if self.selected_job_role:
             conn, cursor = initialize_db()
-            cursor.execute(
-                "INSERT INTO resumes (username, resume_text, job_role, resume_path) VALUES (?, ?, ?, ?)",
-                ("hr_upload", resume_text, self.selected_job_role, file_path),
-            )
-
-            input_prompts = {
-                "evaluation": """
-                            You are an HR analyst tasked with creating a user persona from a resume. Analyze the provided resume and output the persona in a table format.
-
-                            The table should have two columns: "Category" and "Details".
-
-                            The "Category" column must include the following rows:
-
-                            * Name
-                            * Profession
-                            * Education
-                            * Key Strengths
-                            * Areas for Development
-                            * Technical Skills
-                            * Relevant Experience
-                            * Achievements
-                            * Certifications
-
-                            The "Details" column should contain the corresponding information extracted from the resume, formatted as follows:
-
-                            * **Name:** The full name of the candidate.
-                            * **Profession:** The candidate's current profession (e.g., student, software engineer).
-                            * **Education:** The candidate's educational qualifications (degrees, institutions, and dates).
-                            * **Key Strengths:** A concise summary of the candidate's core skills and abilities. Use bullet points for each strength. **Keep descriptions very brief and to the point (no more than 3-5 words per bullet point).**
-                            * **Areas for Development:** Potential areas where the candidate could grow or needs more experience. Use bullet points. **Keep descriptions very brief and to the point (no more than 3-5 words per bullet point).**
-                            * **Technical Skills:** A list of technical skills, including programming languages, frameworks, tools, etc.
-                            * **Relevant Experience:** A concise summary of the candidate's work history, projects, and internships. Use bullet points to list each experience. **Summarize each experience in no more than 5-7 words.**
-                            * **Achievements:** Notable accomplishments and awards. Use bullet points. **Summarize each achievement in no more than 5-7 words.**
-                            * **Certifications:** List of certifications. Use bullet points. **Summarize each certification in no more than 5-7 words.**
-
-                            Formatting and Style Guidelines:
-
-                            * The output must be in a table format.
-                            * Do not include any HTML tags or special characters.
-                            * Use concise language.
-                            * Extract information directly from the resume. Do not add any external information or make assumptions.
-
-                            Example Output Format:
-
-                            | Category | Details |
-                            |---|---|
-                            | Name | \[Full Name] |
-                            | Profession | \[Profession] |
-                            | Education | \[Education Details] |
-                            | Key Strengths | \* \[Strength 1] <br> \* \[Strength 2] |
-                            | Areas for Development | \* \[Development Area 1] <br> \* \[Development Area 2] |
-                            | Technical Skills | \[List of Skills] |
-                            | Relevant Experience | \* \[Experience 1] <br> \* \[Experience 2] |
-                            | Achievements | \* \[Achievement 1] <br> \* \[Achievement 2] |
-                            | Certifications | \* \[Certification 1] <br> \* \[Certification 2] |
-
-                            Here are the inputs:
-
-                            Resume: {text}
-                            JD: {jd}
-                        """,
-                        "match_response": """
-                            You are an AI assistant designed to analyze resumes against job descriptions.
-                            Analyze the following resume and job description.
-                            Evaluate the resume based on the following core categories:
-
-                            * Core Skills
-                            * Education
-                            * Industry Experience
-                            * Projects
-
-                            In addition to these core categories, identify 2-3 more categories that are highly relevant to this specific job description. Examples of additional categories include: AI/ML Development, Application of AI/ML, Deployment, Key Strengths, Areas for Focus, Communication Skills, Leadership Experience, Research Experience, etc.
-
-                            For each identified category (both core and additional):
-
-                            1. Assess the strength of alignment between the resume and the job description for that category.
-                            2. If the resume demonstrates strong alignment with the job description for the category, precede the category with a checkmark (✔️).
-                            3. If the resume demonstrates poor alignment with the job description for the category, precede the category with a warning symbol (⚠️).
-                            4. When determining the Assessment use these guidelines: "Strong" means a very high level of compatibility, "Moderate" means some compatibility, and "Poor" means low or no compatibility.
-
-                            Provide the output in a markdown table format. The table should have four columns: 'Category', 'Job Description Highlights', 'Resume Alignment', and 'Assessment'.
-                            The first row of the table should be the header row with the column names:
-                            For the 'Category' column, list the categories (both core and additional), each preceded by the appropriate symbol (✔️ or ⚠️) as described above.
-
-                            For the 'Job Description Highlights' column, extract key requirements and responsibilities from the job description provided. Keep the descriptions **very brief and to the point**, focusing on the essential keywords. Do not exceed 15 words.
-
-                            For the 'Resume Alignment' column, provide a **concise and descriptive analysis** of how the resume aligns with the corresponding job description highlight. Focus on the key strengths and relevant experience. Keep the descriptions **very brief and to the point**. Do not exceed 15 words.
-
-                            For the 'Assessment' column, use one of these values: 'Strong', 'Good', 'Moderate'.
-                            Here are the inputs:
-
-                            JD:{jd}
-                            Resume:{text}
-
-                            Output the table in markdown format.
-                        """,
-                        "roadmap": """
-                            Suggest a structured learning plan to fill skill gaps.
-                            - **Missing Skills** (List only key missing skills)
-                            - **Free Course Links** (For each missing skill and its link and name only, no description)
-                            - **Paid Course Links** (For each missing skill and its link and name only, no description)
-                            - **Step-by-Step Learning Roadmap** - Mention learning steps **along with estimated time required (in weeks/months)**
-                            Resume: {text}
-                            JD: {jd}
-                        """
-            }
-
-            for key in input_prompts:
-                prompt = input_prompts[key].format(text=resume_text, jd=job_roles[self.selected_job_role])
-                self.session_state[key] = get_gemini_response(prompt, resume_text, job_roles[self.selected_job_role])
-
-            cursor.execute(
-                "UPDATE resumes SET evaluation = ?, match_response = ?, roadmap = ? WHERE id = (SELECT MAX(id) FROM resumes WHERE username = ? AND job_role = ?)",
-                (
-                    self.session_state["evaluation"],
-                    self.session_state["match_response"],
-                    self.session_state["roadmap"],
-                    "hr_upload",
-                    self.selected_job_role,
-                ),
-            )
-            conn.commit()
+            cursor.execute("SELECT username FROM resumes WHERE job_role = ?", (self.selected_job_role,))
+            usernames = [row[0] for row in cursor.fetchall()]
             conn.close()
 
-            if "roadmap" in self.session_state and self.session_state["roadmap"] is not None:
-                roadmap_parsed = parse_roadmap(self.session_state["roadmap"])
-                self.session_state["free_courses"] = roadmap_parsed["free_courses"]
-                self.session_state["paid_courses"] = roadmap_parsed["paid_courses"]
+            if usernames:
+                self.selected_username = st.selectbox("Select Candidate", usernames)
             else:
-                roadmap_parsed = {"missing_skills": [], "free_courses": [], "paid_courses": [], "roadmap_steps": []}
+                self.selected_username = None
+                st.warning(f"No candidates have applied for the '{self.selected_job_role}' role yet.")
+        else:
+            self.selected_username = None
 
-            self.display_analysis_tabs(roadmap_parsed)
+    def render_analysis_display(self):
+        if self.selected_username:
+            conn, cursor = initialize_db()
+            cursor.execute("SELECT evaluation, match_response, roadmap FROM resumes WHERE username = ? AND job_role = ?", (self.selected_username, self.selected_job_role))
+            result = cursor.fetchone()
+            conn.close()
+
+            if result:
+                self.session_state["evaluation"], self.session_state["match_response"], self.session_state["roadmap"] = result
+
+                if "roadmap" in self.session_state and self.session_state["roadmap"] is not None:
+                    roadmap_parsed = parse_roadmap(self.session_state["roadmap"])
+                    self.session_state["free_courses"] = roadmap_parsed["free_courses"]
+                    self.session_state["paid_courses"] = roadmap_parsed["paid_courses"]
+                else:
+                    roadmap_parsed = {"missing_skills": [], "free_courses": [], "paid_courses": [], "roadmap_steps": []}
+
+                self.display_analysis_tabs(roadmap_parsed)
+            else:
+                st.error("Could not retrieve analysis.")
+
 
     def display_analysis_tabs(self, roadmap_parsed):
         tab1, tab2, tab3, tab4 = st.tabs(["📋 User Persona", "📊 Compatibility Score", "📚 Learning Pathway", "📈 Progress Tracking"])
