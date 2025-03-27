@@ -16,12 +16,26 @@ class LoginUI:
             if choice == "Sign Up":
                 new_user = st.text_input("Username")
                 new_password = st.text_input("Password", type="password")
+                full_name = st.text_input("Full Name")
+                email = st.text_input("Email")
+                phone_number = st.text_input("Phone Number")
+                education = st.text_area("Education")
+                skills = st.text_area("Skills")
+                experience = st.text_area("Experience")
+                uploaded_file = st.file_uploader("Upload Resume (PDF)", type="pdf")
+                additional_information = st.text_area("Additional Information")
 
                 if st.button("Register"):
-                    if register_user(new_user, new_password, "candidate"):
-                        st.success("✅ Account Created! Go to Login Page.")
+                    if uploaded_file:
+                        file_path = f"resumes/{new_user}.pdf"
+                        with open(file_path, "wb") as f:
+                            f.write(uploaded_file.getvalue())
+                        if register_user(new_user, new_password, "candidate", full_name, email, phone_number, education, skills, experience, file_path, additional_information):
+                            st.success("✅ Account Created! Go to Login Page.")
+                        else:
+                            st.error("❌ Username already taken. Try another.")
                     else:
-                        st.error("❌ Username already taken. Try another.")
+                        st.error("Please upload a resume")
 
             elif choice == "Login":
                 username = st.text_input("Username")
@@ -33,6 +47,7 @@ class LoginUI:
                     if user:
                         if len(user) >= 3:
                             if role.lower() == user[2].lower():
+                                self.session_state["user_id"] = user[0]
                                 self.session_state["user_role"] = user[2]
                                 self.session_state["logged_in"] = True
                                 self.session_state["username"] = username
@@ -54,16 +69,15 @@ class LoginUI:
             password = st.text_input("Password", type="password")
             if st.button("Login"):
                 user = login_user(username, password)
-
                 if user:
                     if len(user) >= 3:
                         if role.lower() == user[2].lower():
+                            self.session_state["user_id"] = user[0]
                             self.session_state["user_role"] = user[2]
                             self.session_state["logged_in"] = True
                             self.session_state["username"] = username
                             st.success(f"✅ Welcome, {username}!")
                             st.rerun()
-
                         else:
                             st.error("❌ Invalid Role for this user.")
                     else:
