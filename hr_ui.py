@@ -201,28 +201,39 @@ class HRUI:
     def render_candidate_selection(self):
         if self.selected_job_role:
             conn, cursor = initialize_db()
-            cursor.execute("SELECT candidate_profile_id, evaluation FROM resumes WHERE job_role = ?", (self.selected_job_role,))
+            # Fetch candidates and their persona (evaluation) for the selected job role
+            cursor.execute(
+                """
+                SELECT DISTINCT candidate_profiles.full_name, resumes.candidate_profile_id, resumes.evaluation
+                FROM resumes
+                JOIN candidate_profiles ON resumes.candidate_profile_id = candidate_profiles.user_id
+                WHERE resumes.job_role = ? AND resumes.has_applied = 1
+                """,
+                (self.selected_job_role,),
+            )
             results = cursor.fetchall()
             conn.close()
 
             candidate_data = []
             if results:
-                for candidate_profile_id, evaluation in results:
+                for full_name, candidate_profile_id, evaluation in results:  # Unpack all three values
                     if evaluation:
-                        name_match = re.search(r"\| Name \| (.+?) \|", evaluation)  # Updated regex
+                        name_match = re.search(r"\| Name \| (.+?) \|", evaluation)  # Extract name from evaluation
                         if name_match:
                             candidate_data.append((name_match.group(1).strip(), candidate_profile_id))
                         else:
-                            candidate_data.append((str(candidate_profile_id), candidate_profile_id))  # Fallback to candidate_profile_id
+                            candidate_data.append((full_name, candidate_profile_id))  # Fallback to full_name
                     else:
-                        candidate_data.append((str(candidate_profile_id), candidate_profile_id))  # Fallback to candidate_profile_id
+                        candidate_data.append((full_name, candidate_profile_id))  # Fallback to full_name
 
             if candidate_data:
                 candidate_names, candidate_ids = zip(*candidate_data)
                 self.candidate_names = candidate_names
                 self.candidate_ids = candidate_ids
 
-                self.selected_candidate_name = st.selectbox("Select Candidate", candidate_names, index=None, placeholder="Select Candidate")
+                self.selected_candidate_name = st.selectbox(
+                    "Select Candidate", candidate_names, index=None, placeholder="Select Candidate"
+                )
 
                 if st.button("View Analysis"):
                     if self.selected_candidate_name:
@@ -233,16 +244,27 @@ class HRUI:
                 st.warning(f"No candidates have applied for the '{self.selected_job_role}' role yet.")
         else:
             self.selected_candidate_id = None
-
+            
     def render_analysis_display(self):
         if self.selected_candidate_id:
             conn, cursor = initialize_db()
-            cursor.execute("SELECT evaluation, match_response, roadmap FROM resumes WHERE candidate_profile_id = ? AND job_role = ?", (self.selected_candidate_id, self.selected_job_role))
-            result = cursor.fetchone()
+            
+            # Fetch evaluation (persona) independent of job role
+            cursor.execute("SELECT evaluation FROM resumes WHERE candidate_profile_id = ?", (self.selected_candidate_id,))
+            persona_result = cursor.fetchone()
+
+            # Fetch match_response and roadmap based on job role
+            cursor.execute("SELECT match_response, roadmap FROM resumes WHERE candidate_profile_id = ? AND job_role = ?", (self.selected_candidate_id, self.selected_job_role))
+            analysis_result = cursor.fetchone()
             conn.close()
 
-            if result:
-                self.session_state["evaluation"], self.session_state["match_response"], self.session_state["roadmap"] = result
+            if persona_result:
+                self.session_state["evaluation"] = persona_result[0]  # Persona from resumes table
+            else:
+                self.session_state["evaluation"] = None
+
+            if analysis_result:
+                self.session_state["match_response"], self.session_state["roadmap"] = analysis_result
 
                 if "roadmap" in self.session_state and self.session_state["roadmap"] is not None:
                     roadmap_parsed = parse_roadmap(self.session_state["roadmap"])

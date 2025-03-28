@@ -2,9 +2,9 @@ import streamlit as st
 import os
 from database import initialize_db, get_candidate_profile
 from pdf_processor import input_pdf_text
-from utils import summarize_job_description
 from ai_response import get_gemini_response, parse_roadmap
 import datetime
+from utils import summarize_job_description
 
 class CandidateUI:
     def __init__(self, session_state):
@@ -40,6 +40,7 @@ class CandidateUI:
 
                 with st.expander("View Job Description"):
                     st.write(summarized_jd)
+
                 # Check if the candidate has already applied for this job
                 conn, cursor = initialize_db()
                 cursor.execute(
@@ -68,29 +69,8 @@ class CandidateUI:
 
                 conn, cursor = initialize_db()
 
-                # Check if the candidate already has a record for the selected job role
-                cursor.execute(
-                    "SELECT id FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
-                    (self.session_state["user_id"], selected_role),
-                )
-                existing_record = cursor.fetchone()
-
-                if existing_record:
-                    # Update the has_applied column if the record already exists
-                    cursor.execute(
-                        "UPDATE resumes SET has_applied = 1, application_date = ? WHERE candidate_profile_id = ? AND job_role = ?",
-                        (datetime.datetime.now(), self.session_state["user_id"], selected_role),
-                    )
-                else:
-                    # Insert a new record if it doesn't exist
-                    cursor.execute(
-                        "INSERT INTO resumes (candidate_profile_id, job_role, application_date, has_applied) VALUES (?, ?, ?, ?)",
-                        (self.session_state["user_id"], selected_role, datetime.datetime.now(), 1),
-                    )
-
-                # Generate analysis and roadmap
-                input_prompts = {
-                    "evaluation": """
+                # Generate persona (evaluation) from the resume
+                evaluation_prompt = """
                         You are an HR analyst tasked with creating a user persona from a resume. Analyze the provided resume and output the persona in a table format.
                         The table should have two columns: "Category" and "Details".
                         The "Category" column must include the following rows:
@@ -130,10 +110,33 @@ class CandidateUI:
                         | Relevant Experience | * [Experience 1] <br> * [Experience 2] |
                         | Achievements | * [Achievement 1] <br> * [Achievement 2] |
                         | Certifications | * [Certification 1] <br> * [Certification 2] |
-                        Here are the inputs:
+                        Here is the inputs:
                         Resume: {text}
-                        JD: {jd}
-                    """,
+                    """
+                evaluation = get_gemini_response(evaluation_prompt.format(text=resume_text), resume_text, None)
+
+                # Check if the candidate already has a record for the selected job role
+                cursor.execute(
+                    "SELECT id FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
+                    (self.session_state["user_id"], selected_role),
+                )
+                existing_record = cursor.fetchone()
+
+                if existing_record:
+                    # Update the evaluation and has_applied column if the record already exists
+                    cursor.execute(
+                        "UPDATE resumes SET evaluation = ?, has_applied = 1, application_date = ? WHERE candidate_profile_id = ? AND job_role = ?",
+                        (evaluation, datetime.datetime.now(), self.session_state["user_id"], selected_role),
+                    )
+                else:
+                    # Insert a new record with the evaluation if it doesn't exist
+                    cursor.execute(
+                        "INSERT INTO resumes (candidate_profile_id, job_role, evaluation, application_date, has_applied) VALUES (?, ?, ?, ?, ?)",
+                        (self.session_state["user_id"], selected_role, evaluation, datetime.datetime.now(), 1),
+                    )
+
+                # Generate match_response and roadmap
+                input_prompts = {
                     "match_response": """
                         You are an AI assistant designed to analyze resumes against job descriptions.
                         Analyze the following resume and job description.
@@ -175,9 +178,8 @@ class CandidateUI:
                     self.session_state[key] = get_gemini_response(prompt, resume_text, selected_role)
 
                 cursor.execute(
-                    "UPDATE resumes SET evaluation = ?, match_response = ?, roadmap = ? WHERE candidate_profile_id = ? AND job_role = ?",
+                    "UPDATE resumes SET match_response = ?, roadmap = ? WHERE candidate_profile_id = ? AND job_role = ?",
                     (
-                        self.session_state["evaluation"],
                         self.session_state["match_response"],
                         self.session_state["roadmap"],
                         self.session_state["user_id"],
