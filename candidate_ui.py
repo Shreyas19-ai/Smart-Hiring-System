@@ -4,6 +4,7 @@ from database import initialize_db, get_candidate_profile
 from pdf_processor import input_pdf_text
 from ai_response import get_gemini_response, parse_roadmap
 import datetime
+import pandas as pd
 from utils import summarize_job_description
 
 class CandidateUI:
@@ -19,8 +20,59 @@ class CandidateUI:
 
         self.clear_session_state()
 
+        # Add a "View Persona" button
+        if st.sidebar.button("View Persona"):
+            self.view_persona()
+            return
+
         # Single option for candidates: Search Jobs
         self.search_jobs()
+
+    def view_persona(self):
+        """Allow candidates to view their persona."""
+        st.subheader("📝 User Persona")
+        conn, cursor = initialize_db()
+        try:
+            # Fetch the evaluation (persona) from the database
+            cursor.execute(
+                "SELECT evaluation FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
+                (self.session_state["user_id"], "General"),  # "General" is the placeholder job role for persona
+            )
+            result = cursor.fetchone()
+
+            if result and result[0]:  # Check if the evaluation exists
+                evaluation = result[0]
+
+                # Extract the table from the evaluation response
+                table_start = evaluation.find("| Category |")
+                if table_start != -1:
+                    table_markdown = evaluation[table_start:]
+                    # Convert Markdown to CSV-like string for pandas
+                    import io
+                    table_csv = io.StringIO(table_markdown.replace("| ", "|").replace(" |", "|"))
+
+                    df = pd.read_csv(table_csv, sep='|', index_col=False)
+
+                    # Remove unnecessary columns
+                    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+                    df.dropna(how='all', inplace=True)
+                    if df.iloc[-1].all() == '-':
+                        df = df.iloc[:-1]
+
+                    # Display the table HTML
+                    st.markdown(
+                        df.to_html(index=False, escape=False),
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.error("Table not found in the persona response.")
+                    st.write(evaluation)
+            else:
+                st.warning("No persona found. Please upload your resume during registration.")
+        except Exception as e:
+            st.error(f"Could not display User Persona in table format: {e}")
+        finally:
+            conn.close()
 
     def search_jobs(self):
         st.title("Search for Jobs")
@@ -59,6 +111,7 @@ class CandidateUI:
             st.info("No job postings available at the moment.")
 
     def apply_for_job(self, selected_role):
+        """Handle job application and generate match_response and roadmap."""
         candidate_profile = get_candidate_profile(self.session_state["user_id"])
         if candidate_profile and candidate_profile[7]:  # Check if resume_path exists
             resume_path = candidate_profile[7]
@@ -69,52 +122,6 @@ class CandidateUI:
 
                 conn, cursor = initialize_db()
 
-                # Generate persona (evaluation) from the resume
-                evaluation_prompt = """
-                        You are an HR analyst tasked with creating a user persona from a resume. Analyze the provided resume and output the persona in a table format.
-                        The table should have two columns: "Category" and "Details".
-                        The "Category" column must include the following rows:
-                        * Name
-                        * Profession
-                        * Education
-                        * Key Strengths
-                        * Areas for Development
-                        * Technical Skills
-                        * Relevant Experience
-                        * Achievements
-                        * Certifications
-                        The "Details" column should contain the corresponding information extracted from the resume, formatted as follows:
-                        * **Name:** The full name of the candidate.
-                        * **Profession:** The candidate's current profession (e.g., student, software engineer).
-                        * **Education:** The candidate's educational qualifications (degrees, institutions, and dates).
-                        * **Key Strengths:** A concise summary of the candidate's core skills and abilities. Use bullet points for each strength. **Keep descriptions very brief and to the point (no more than 3-5 words per bullet point).**
-                        * **Areas for Development:** Potential areas where the candidate could grow or needs more experience. Use bullet points. **Keep descriptions very brief and to the point (no more than 3-5 words per bullet point).**
-                        * **Technical Skills:** A list of technical skills, including programming languages, frameworks, tools, etc.
-                        * **Relevant Experience:** A concise summary of the candidate's work history, projects, and internships. Use bullet points to list each experience. **Summarize each experience in no more than 5-7 words.**
-                        * **Achievements:** Notable accomplishments and awards. Use bullet points. **Summarize each achievement in no more than 5-7 words.**
-                        * **Certifications:** List of certifications. Use bullet points. **Summarize each certification in no more than 5-7 words.**
-                        Formatting and Style Guidelines:
-                        * The output must be in a table format.
-                        * Do not include any HTML tags or special characters.
-                        * Use concise language.
-                        * Extract information directly from the resume. Do not add any external information or make assumptions.
-                        Example Output Format:
-                        | Category | Details |
-                        |---|---|
-                        | Name | [Full Name] |
-                        | Profession | [Profession] |
-                        | Education | [Education Details] |
-                        | Key Strengths | * [Strength 1] <br> * [Strength 2] |
-                        | Areas for Development | * [Development Area 1] <br> * [Development Area 2] |
-                        | Technical Skills | [List of Skills] |
-                        | Relevant Experience | * [Experience 1] <br> * [Experience 2] |
-                        | Achievements | * [Achievement 1] <br> * [Achievement 2] |
-                        | Certifications | * [Certification 1] <br> * [Certification 2] |
-                        Here is the inputs:
-                        Resume: {text}
-                    """
-                evaluation = get_gemini_response(evaluation_prompt.format(text=resume_text), resume_text, None)
-
                 # Check if the candidate already has a record for the selected job role
                 cursor.execute(
                     "SELECT id FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
@@ -123,16 +130,16 @@ class CandidateUI:
                 existing_record = cursor.fetchone()
 
                 if existing_record:
-                    # Update the evaluation and has_applied column if the record already exists
+                    # Update the has_applied column if the record already exists
                     cursor.execute(
-                        "UPDATE resumes SET evaluation = ?, has_applied = 1, application_date = ? WHERE candidate_profile_id = ? AND job_role = ?",
-                        (evaluation, datetime.datetime.now(), self.session_state["user_id"], selected_role),
+                        "UPDATE resumes SET has_applied = 1, application_date = ? WHERE candidate_profile_id = ? AND job_role = ?",
+                        (datetime.datetime.now(), self.session_state["user_id"], selected_role),
                     )
                 else:
-                    # Insert a new record with the evaluation if it doesn't exist
+                    # Insert a new record if it doesn't exist
                     cursor.execute(
-                        "INSERT INTO resumes (candidate_profile_id, job_role, evaluation, application_date, has_applied) VALUES (?, ?, ?, ?, ?)",
-                        (self.session_state["user_id"], selected_role, evaluation, datetime.datetime.now(), 1),
+                        "INSERT INTO resumes (candidate_profile_id, job_role, application_date, has_applied) VALUES (?, ?, ?, ?)",
+                        (self.session_state["user_id"], selected_role, datetime.datetime.now(), 1),
                     )
 
                 # Generate match_response and roadmap

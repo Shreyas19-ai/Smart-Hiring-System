@@ -3,7 +3,6 @@ import os
 from dotenv import load_dotenv
 import re
 import uuid
-from database import initialize_db
 import pandas as pd
 import streamlit as st
 import time

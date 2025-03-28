@@ -2,6 +2,8 @@ import sqlite3
 import hashlib
 import os
 from utils import calculate_similarity_score
+from ai_response import get_gemini_response
+from pdf_processor import input_pdf_text
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
@@ -121,7 +123,57 @@ def register_user(username, password, role, full_name, email, phone_number, educ
 
             # Read the resume text
             with open(resume_path, "rb") as f:
-                resume_text = f.read().decode('utf-8', errors='ignore')
+                resume_text = input_pdf_text(f)
+
+            # Generate persona (evaluation) from the resume
+            evaluation_prompt = """
+                You are an HR analyst tasked with creating a user persona from a resume. Analyze the provided resume and output the persona in a table format.
+                        The table should have two columns: "Category" and "Details".
+                        The "Category" column must include the following rows:
+                        * Name
+                        * Profession
+                        * Education
+                        * Key Strengths
+                        * Areas for Development
+                        * Technical Skills
+                        * Relevant Experience
+                        * Achievements
+                        * Certifications
+                        The "Details" column should contain the corresponding information extracted from the resume, formatted as follows:
+                        * **Name:** The full name of the candidate.
+                        * **Profession:** The candidate's current profession (e.g., student, software engineer).
+                        * **Education:** The candidate's educational qualifications (degrees, institutions, and dates).
+                        * **Key Strengths:** A concise summary of the candidate's core skills and abilities. Use bullet points for each strength. **Keep descriptions very brief and to the point (no more than 3-5 words per bullet point).**
+                        * **Areas for Development:** Potential areas where the candidate could grow or needs more experience. Use bullet points. **Keep descriptions very brief and to the point (no more than 3-5 words per bullet point).**
+                        * **Technical Skills:** A list of technical skills, including programming languages, frameworks, tools, etc.
+                        * **Relevant Experience:** A concise summary of the candidate's work history, projects, and internships. Use bullet points to list each experience. **Summarize each experience in no more than 5-7 words.**
+                        * **Achievements:** Notable accomplishments and awards. Use bullet points. **Summarize each achievement in no more than 5-7 words.**
+                        * **Certifications:** List of certifications. Use bullet points. **Summarize each certification in no more than 5-7 words.**
+                        Formatting and Style Guidelines:
+                        * The output must be in a table format.
+                        * Do not include any HTML tags or special characters.
+                        * Use concise language.
+                        * Extract information directly from the resume. Do not add any external information or make assumptions.
+                        Example Output Format:
+                        | Category | Details |
+                        |---|---|
+                        | Name | [Full Name] |
+                        | Profession | [Profession] |
+                        | Education | [Education Details] |
+                        | Key Strengths | * [Strength 1] <br> * [Strength 2] |
+                        | Areas for Development | * [Development Area 1] <br> * [Development Area 2] |
+                        | Technical Skills | [List of Skills] |
+                        | Relevant Experience | * [Experience 1] <br> * [Experience 2] |
+                        | Achievements | * [Achievement 1] <br> * [Achievement 2] |
+                        | Certifications | * [Certification 1] <br> * [Certification 2] |
+                        Here is the inputs:
+                        Resume: {text}
+                        """
+            evaluation = get_gemini_response(evaluation_prompt.format(text=resume_text), resume_text, None)
+
+            # Store the persona in the resumes table with a placeholder job role ("General")
+            cursor.execute("INSERT INTO resumes (candidate_profile_id, job_role, evaluation) VALUES (?, ?, ?)", 
+                           (user_id, "General", evaluation))
 
             # Fetch all job roles and their descriptions
             cursor.execute("SELECT job_role, job_description FROM job_postings")
