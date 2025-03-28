@@ -2,6 +2,7 @@ import streamlit as st
 import os
 from database import initialize_db, get_candidate_profile
 from pdf_processor import input_pdf_text
+from utils import summarize_job_description
 from ai_response import get_gemini_response, parse_roadmap
 import datetime
 
@@ -35,9 +36,10 @@ class CandidateUI:
             if selected_job:
                 job_details = next(job for job in jobs if job[1] == selected_job)
                 st.write(f"**Job Role:** {job_details[1]}")
-                with st.expander("View Job Description"):
-                    st.write(job_details[2])
+                summarized_jd = summarize_job_description(job_details[2])
 
+                with st.expander("View Job Description"):
+                    st.write(summarized_jd)
                 # Check if the candidate has already applied for this job
                 conn, cursor = initialize_db()
                 cursor.execute(
