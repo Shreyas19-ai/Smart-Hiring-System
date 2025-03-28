@@ -1,5 +1,6 @@
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+import google.generativeai as genai
 
 def calculate_similarity_score(resume_text, job_description):
     """
@@ -13,3 +14,23 @@ def calculate_similarity_score(resume_text, job_description):
     except Exception as e:
         print(f"Error calculating similarity score: {e}")
         return 0
+    
+def summarize_job_description(job_description):
+    """
+    Summarize the job description using the Gemini API.
+    """
+    try:
+        # Define the prompt for summarization
+        prompt = f"""
+        Summarize the following job description into key elements such as required skills, qualifications, and responsibilities:
+        {job_description}
+        """
+        # Use the Gemini API to generate the summary
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        response = model.generate_content(prompt)
+        
+        # Extract and return the summary
+        return response.text if response and response.text else "Error: No summary generated."
+    except Exception as e:
+        print(f"Error summarizing job description using Gemini: {e}")
+        return "Error summarizing job description."
