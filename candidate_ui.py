@@ -11,25 +11,32 @@ from utils import summarize_job_description
 class CandidateUI:
     def __init__(self, session_state):
         self.session_state = session_state
+        # Initialize navigation state
+        if "current_view" not in self.session_state:
+            self.session_state["current_view"] = "Search Jobs"  # Default view
 
     def render(self):
+        # Render navigation buttons
+        self.render_navigation()
+
+        # Render the selected view
+        if self.session_state["current_view"] == "Search Jobs":
+            self.search_jobs()
+        elif self.session_state["current_view"] == "View Persona":
+            self.view_persona(candidate_id=self.session_state["user_id"])
+
+    def render_navigation(self):
         st.sidebar.title(f"Welcome, {self.session_state['username']} 👋")
+        if st.sidebar.button("Search Jobs"):
+            self.session_state["current_view"] = "Search Jobs"
+        if st.sidebar.button("View Persona"):
+            self.session_state["current_view"] = "View Persona"
         if st.sidebar.button("Logout"):
             self.session_state["logged_in"] = False
             self.session_state["username"] = None
             st.rerun()
 
-        self.clear_session_state()
-
-        # Add a "View Persona" button
-        if st.sidebar.button("View Persona"):
-            self.view_persona(candidate_id=self.session_state["user_id"])
-            return
-
-        # Single option for candidates: Search Jobs
-        self.search_jobs()
-
-    def view_persona(self,candidate_id):
+    def view_persona(self, candidate_id):
         """Allow candidates to view their persona."""
         st.subheader("📝 User Persona")
         conn, cursor = initialize_db()
