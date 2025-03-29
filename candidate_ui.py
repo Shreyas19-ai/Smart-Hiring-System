@@ -2,7 +2,8 @@ import streamlit as st
 import os
 from database import initialize_db, get_candidate_profile
 from pdf_processor import input_pdf_text
-from ai_response import get_gemini_response, parse_roadmap
+from ai_response import get_gemini_response
+from utils import calculate_similarity_score
 import datetime
 import pandas as pd
 from utils import summarize_job_description
@@ -24,6 +25,8 @@ class CandidateUI:
             self.search_jobs()
         elif self.session_state["current_view"] == "View Persona":
             self.view_persona(candidate_id=self.session_state["user_id"])
+        elif self.session_state["current_view"] == "Update Profile":
+            self.update_profile()
 
     def render_navigation(self):
         st.sidebar.title(f"Welcome, {self.session_state['username']} 👋")
@@ -31,10 +34,125 @@ class CandidateUI:
             self.session_state["current_view"] = "Search Jobs"
         if st.sidebar.button("View Persona"):
             self.session_state["current_view"] = "View Persona"
+        if st.sidebar.button("Update Profile"):
+            self.session_state["current_view"] = "Update Profile"
         if st.sidebar.button("Logout"):
             self.session_state["logged_in"] = False
             self.session_state["username"] = None
             st.rerun()
+
+    def update_profile(self):
+        """Allow candidates to update their profile by re-uploading a new resume."""
+        st.title("Update Profile")
+        st.subheader("Upload a new resume to update your profile and persona.")
+
+        # File uploader for the new resume
+        new_resume = st.file_uploader("Upload your new resume (PDF only)", type=["pdf"])
+
+        # Add a unique key to the button
+        if new_resume and st.button("Update Profile", key="update_profile_button"):
+            try:
+                # Save the uploaded resume to a temporary location
+                temp_resume_path = f"temp_{self.session_state['user_id']}.pdf"
+                with open(temp_resume_path, "wb") as f:
+                    f.write(new_resume.read())
+
+                # Update the profile in the database
+                success = self.update_profile_in_db(temp_resume_path)
+
+                if success:
+                    st.success("✅ Profile updated successfully!")
+                    st.info("Your new persona and similarity scores have been updated.")
+                else:
+                    st.error("❌ Failed to update profile. Please try again.")
+            except Exception as e:
+                st.error(f"An error occurred while updating your profile: {e}")
+
+    def update_profile_in_db(self, resume_path):
+        """Update the candidate's profile in the database."""
+        try:
+            conn, cursor = initialize_db()
+
+            # Read the new resume text
+            with open(resume_path, "rb") as f:
+                resume_text = input_pdf_text(f)
+
+            # Generate a new persona (evaluation)
+            evaluation_prompt = """
+                You are an HR analyst tasked with creating a user persona from a resume. Analyze the provided resume and output the persona in a table format.
+                        The table should have two columns: "Category" and "Details".
+                        The "Category" column must include the following rows:
+                        * Name
+                        * Profession
+                        * Education
+                        * Key Strengths
+                        * Areas for Development
+                        * Technical Skills
+                        * Relevant Experience
+                        * Achievements
+                        * Certifications
+                        The "Details" column should contain the corresponding information extracted from the resume, formatted as follows:
+                        * **Name:** The full name of the candidate.
+                        * **Profession:** The candidate's current profession (e.g., student, software engineer).
+                        * **Education:** The candidate's educational qualifications (degrees, institutions, and dates).
+                        * **Key Strengths:** A concise summary of the candidate's core skills and abilities. Use bullet points for each strength. **Keep descriptions very brief and to the point (no more than 3-5 words per bullet point).**
+                        * **Areas for Development:** Potential areas where the candidate could grow or needs more experience. Use bullet points. **Keep descriptions very brief and to the point (no more than 3-5 words per bullet point).**
+                        * **Technical Skills:** A list of technical skills, including programming languages, frameworks, tools, etc.
+                        * **Relevant Experience:** A concise summary of the candidate's work history, projects, and internships. Use bullet points to list each experience. **Summarize each experience in no more than 5-7 words.**
+                        * **Achievements:** Notable accomplishments and awards. Use bullet points. **Summarize each achievement in no more than 5-7 words.**
+                        * **Certifications:** List of certifications. Use bullet points. **Summarize each certification in no more than 5-7 words.**
+                        Formatting and Style Guidelines:
+                        * The output must be in a table format.
+                        * Do not include any HTML tags or special characters.
+                        * Use concise language.
+                        * Extract information directly from the resume. Do not add any external information or make assumptions.
+                        Example Output Format:
+                        | Category | Details |
+                        |---|---|
+                        | Name | [Full Name] |
+                        | Profession | [Profession] |
+                        | Education | [Education Details] |
+                        | Key Strengths | * [Strength 1] <br> * [Strength 2] |
+                        | Areas for Development | * [Development Area 1] <br> * [Development Area 2] |
+                        | Technical Skills | [List of Skills] |
+                        | Relevant Experience | * [Experience 1] <br> * [Experience 2] |
+                        | Achievements | * [Achievement 1] <br> * [Achievement 2] |
+                        | Certifications | * [Certification 1] <br> * [Certification 2] |
+                        Here is the inputs:
+                        Resume: {text}
+            """
+            evaluation = get_gemini_response(evaluation_prompt.format(text=resume_text), resume_text, None)
+
+            # Update the evaluation in the resumes table for the "General" job role
+            cursor.execute(
+                "UPDATE resumes SET evaluation = ? WHERE candidate_profile_id = ? AND job_role = ?",
+                (evaluation, self.session_state["user_id"], "General"),
+            )
+
+            # Fetch all job roles and their descriptions
+            cursor.execute("SELECT job_role, job_description FROM job_postings")
+            job_postings = cursor.fetchall()
+
+            # Recalculate similarity scores for all job roles
+            for job_role, job_description in job_postings:
+                similarity_score = calculate_similarity_score(resume_text, job_description)
+                cursor.execute(
+                    "UPDATE resumes SET similarity_score = ? WHERE candidate_profile_id = ? AND job_role = ?",
+                    (similarity_score, self.session_state["user_id"], job_role),
+                )
+
+            # Update the resume path in the candidate_profiles table
+            cursor.execute(
+                "UPDATE candidate_profiles SET resume_path = ? WHERE user_id = ?",
+                (resume_path, self.session_state["user_id"]),
+            )
+
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Error updating profile: {e}")
+            return False
 
     def view_persona(self, candidate_id):
         """Allow candidates to view their persona."""
