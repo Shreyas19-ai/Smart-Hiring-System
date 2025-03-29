@@ -112,6 +112,7 @@ def register_user(username, password, role, full_name, email, phone_number, educ
         hashed_password = hash_password(password)
         with sqlite3.connect("users.db") as conn:
             cursor = conn.cursor()
+
             # Insert user into the users table
             cursor.execute("INSERT INTO users (username, password, role, email) VALUES (?, ?, ?, ?)", 
                            (username, hashed_password, role, email))
