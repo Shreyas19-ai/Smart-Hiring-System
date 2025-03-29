@@ -202,20 +202,115 @@ class CandidateUI:
 
     def search_jobs(self):
         st.title("Search for Jobs")
+
+        # Add a button to toggle between Recommended Jobs and Available Jobs
+        if "show_recommended" not in self.session_state:
+            self.session_state["show_recommended"] = False
+
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("Recommended Jobs"):
+                self.session_state["show_recommended"] = True
+        with col2:
+            if st.button("Available Jobs"):
+                self.session_state["show_recommended"] = False
+
+        st.markdown("---")
+
+        # Show Recommended Jobs if toggled
+        if self.session_state["show_recommended"]:
+            self.display_recommended_jobs()
+        else:
+            self.display_available_jobs()
+
+    def get_recommended_jobs(self):
+        """Fetch recommended jobs based on resume similarity."""
         conn, cursor = initialize_db()
-        cursor.execute("SELECT job_id, job_role, job_description FROM job_postings")
+        cursor.execute("SELECT resume_path FROM candidate_profiles WHERE user_id = ?", (self.session_state["user_id"],))
+        resume_path = cursor.fetchone()[0]
+        conn.close()
+
+        if not resume_path or not os.path.exists(resume_path):
+            return []
+
+        try:
+            with open(resume_path, "rb") as f:
+                resume_text = input_pdf_text(f)
+
+            conn, cursor = initialize_db()
+            cursor.execute("SELECT job_id, job_role, job_description FROM job_postings")
+            jobs = cursor.fetchall()
+            conn.close()
+
+            recommendations = []
+            for job_id, job_role, job_description in jobs:
+                similarity_score = calculate_similarity_score(resume_text, job_description)
+                if similarity_score >= 80:  # Threshold for recommendations
+                    recommendations.append({
+                        "job_id": job_id,
+                        "job_role": job_role,
+                        "summary": summarize_job_description(job_description),
+                        "similarity_score": similarity_score,
+                    })
+
+            # Sort recommendations by similarity score (descending)
+            recommendations.sort(key=lambda x: x["similarity_score"], reverse=True)
+            return recommendations
+        except Exception as e:
+            print(f"Error generating recommendations: {e}")
+            return []
+
+    def display_recommended_jobs(self):
+        """Display recommended jobs based on resume similarity."""
+        st.subheader("🔍 Recommended Jobs for You")
+        recommended_jobs = self.get_recommended_jobs()
+
+        if recommended_jobs:
+            for job in recommended_jobs:
+                st.markdown(f"### {job['job_role']}")
+                with st.expander("View Job Description"):
+                    st.write(job['summary'])
+
+                # Check if the candidate has already applied for this job
+                conn, cursor = initialize_db()
+                cursor.execute(
+                    "SELECT has_applied FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
+                    (self.session_state["user_id"], job['job_role']),
+                )
+                applied_status = cursor.fetchone()
+                conn.close()
+
+                if applied_status and applied_status[0] == 1:
+                    st.warning(f"You have already applied for the '{job['job_role']}' role.")
+                else:
+                    if st.button(f"Apply for {job['job_role']}", key=f"apply_recommended_{job['job_id']}"):
+                        self.apply_for_job(job['job_role'])
+        else:
+            st.info("No personalized recommendations available at the moment.")
+
+    def display_available_jobs(self):
+        """Display all available jobs with pagination."""
+        st.subheader("📋 Available Jobs")
+
+        # Fetch all jobs with pagination
+        conn, cursor = initialize_db()
+        jobs_per_page = 10
+        if "page" not in self.session_state:
+            self.session_state["page"] = 0
+
+        offset = self.session_state["page"] * jobs_per_page
+        cursor.execute("SELECT job_id, job_role, job_description FROM job_postings LIMIT ? OFFSET ?", (jobs_per_page, offset))
         jobs = cursor.fetchall()
+
+        # Fetch total job count for pagination
+        cursor.execute("SELECT COUNT(*) FROM job_postings")
+        total_jobs = cursor.fetchone()[0]
         conn.close()
 
         if jobs:
-            job_roles = [job[1] for job in jobs]
-            selected_job = st.selectbox("Available Jobs", job_roles, index=0, placeholder="Select a job role")
-
-            if selected_job:
-                job_details = next(job for job in jobs if job[1] == selected_job)
-                st.write(f"**Job Role:** {job_details[1]}")
-                summarized_jd = summarize_job_description(job_details[2])
-
+            for job_id, job_role, job_description in jobs:
+                st.markdown(f"### {job_role}")
+                summarized_jd = summarize_job_description(job_description)
                 with st.expander("View Job Description"):
                     st.write(summarized_jd)
 
@@ -223,16 +318,29 @@ class CandidateUI:
                 conn, cursor = initialize_db()
                 cursor.execute(
                     "SELECT has_applied FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
-                    (self.session_state["user_id"], job_details[1]),
+                    (self.session_state["user_id"], job_role),
                 )
                 applied_status = cursor.fetchone()
                 conn.close()
 
                 if applied_status and applied_status[0] == 1:
-                    st.warning(f"You have already applied for the '{job_details[1]}' role.")
+                    st.warning(f"You have already applied for the '{job_role}' role.")
                 else:
-                    if st.button("Apply for this Job"):
-                        self.apply_for_job(job_details[1])
+                    if st.button(f"Apply for {job_role}", key=f"apply_{job_id}"):
+                        self.apply_for_job(job_role)
+
+            # Pagination controls
+            col1, col2, col3 = st.columns([1, 1, 1])
+            with col1:
+                if self.session_state["page"] > 0:
+                    if st.button("Previous"):
+                        self.session_state["page"] -= 1
+                        st.experimental_rerun()
+            with col3:
+                if offset + jobs_per_page < total_jobs:
+                    if st.button("Next"):
+                        self.session_state["page"] += 1
+                        st.experimental_rerun()
         else:
             st.info("No job postings available at the moment.")
 
