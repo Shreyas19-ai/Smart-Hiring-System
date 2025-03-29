@@ -126,26 +126,28 @@ class HRUI:
             st.info(f"No candidates found for the role '{self.selected_job_role}'.")
             return
 
-        # Display similarity scores
+        # Hardcoded threshold: 75%
+        threshold = 80
         results = []
         candidate_options = {"Select a Candidate": None}  # Add placeholder option
         for candidate in candidates:
             user_id, full_name, email, similarity_score, resume_path = candidate
-            results.append({
-                "Name": full_name,
-                "Email": email,
-                "Similarity Score": f"{similarity_score:.2f}%" if similarity_score is not None else "N/A",
-                "Resume Path": resume_path
-            })
-            candidate_options[f"{full_name} ({email})"] = user_id
+            if similarity_score is not None and similarity_score >= threshold:  # Apply threshold filter
+                results.append({
+                    "Name": full_name,
+                    "Email": email,
+                    "Similarity Score": f"{similarity_score:.2f}%" if similarity_score is not None else "N/A",
+                    "Resume Path": resume_path
+                })
+                candidate_options[f"{full_name} ({email})"] = user_id
 
         if results:
-            st.success(f"Found {len(results)} candidates for the role '{self.selected_job_role}'.")
+            st.success(f"Found {len(results)} candidates for the role '{self.selected_job_role}' above the threshold of {threshold}%.")
             df = pd.DataFrame(results)
             df = df[["Name", "Email", "Similarity Score"]]
             st.markdown(df.to_html(index=False, escape=False), unsafe_allow_html=True)
         else:
-            st.info(f"No candidates found for the role '{self.selected_job_role}'.")
+            st.warning(f"No candidates meet the threshold of {threshold}%.")
             return
 
         # Dropdown to select a candidate
@@ -175,35 +177,40 @@ class HRUI:
                     st.warning(f"No candidates have applied for the '{self.selected_job_role}' job role yet.")
                     return
 
+                threshold = 80
                 new_ranked_resumes = []
                 for i, result in enumerate(ranked_resumes):
                     full_name, email, similarity_score, resume_path = result  # Unpack tuple
-                    candidate_data = {
-                        "Index": i + 1,
-                        "Name": full_name,
-                        "Email": f'<a href="mailto:{email}">{email}</a>',
-                        "Score": f"{similarity_score:.2f}%" if similarity_score is not None else "N/A",
-                    }
+                    if similarity_score is not None and similarity_score >= threshold:  # Apply threshold filter
+                        candidate_data = {
+                            "Index": i + 1,
+                            "Name": full_name,
+                            "Email": f'<a href="mailto:{email}">{email}</a>',
+                            "Score": f"{similarity_score:.2f}%" if similarity_score is not None else "N/A",
+                        }
 
-                    # Add resume download link if the file exists
-                    if resume_path and os.path.exists(resume_path):
-                        try:
-                            with open(resume_path, "rb") as f:
-                                b64 = base64.b64encode(f.read()).decode()
-                            candidate_data["Resume"] = f'<a href="data:application/octet-stream;base64,{b64}" download="resume_{full_name}.pdf">📝</a>'
-                        except FileNotFoundError:
-                            candidate_data["Resume"] = "File not found"
-                        except Exception as e:
-                            candidate_data["Resume"] = f"Error: {e}"
-                    else:
-                        candidate_data["Resume"] = "Resume path not available"
+                        # Add resume download link if the file exists
+                        if resume_path and os.path.exists(resume_path):
+                            try:
+                                with open(resume_path, "rb") as f:
+                                    b64 = base64.b64encode(f.read()).decode()
+                                candidate_data["Resume"] = f'<a href="data:application/octet-stream;base64,{b64}" download="resume_{full_name}.pdf">📝</a>'
+                            except FileNotFoundError:
+                                candidate_data["Resume"] = "File not found"
+                            except Exception as e:
+                                candidate_data["Resume"] = f"Error: {e}"
+                        else:
+                            candidate_data["Resume"] = "Resume path not available"
 
-                    new_ranked_resumes.append(candidate_data)
+                        new_ranked_resumes.append(candidate_data)
 
-                st.markdown("---")
-                df = pd.DataFrame(new_ranked_resumes)
-                df = df[["Index", "Name", "Email", "Score", "Resume"]]
-                st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
+                if new_ranked_resumes:
+                    st.markdown("---")
+                    df = pd.DataFrame(new_ranked_resumes)
+                    df = df[["Index", "Name", "Email", "Score", "Resume"]]
+                    st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
+                else:
+                    st.warning("No candidates meet the threshold of {threshold}% .")
 
 
     def handle_view_analysis(self):
