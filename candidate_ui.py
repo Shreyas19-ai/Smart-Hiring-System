@@ -7,6 +7,7 @@ import datetime
 import pandas as pd
 from utils import summarize_job_description
 
+
 class CandidateUI:
     def __init__(self, session_state):
         self.session_state = session_state
@@ -22,13 +23,13 @@ class CandidateUI:
 
         # Add a "View Persona" button
         if st.sidebar.button("View Persona"):
-            self.view_persona()
+            self.view_persona(candidate_id=self.session_state["user_id"])
             return
 
         # Single option for candidates: Search Jobs
         self.search_jobs()
 
-    def view_persona(self):
+    def view_persona(self,candidate_id):
         """Allow candidates to view their persona."""
         st.subheader("📝 User Persona")
         conn, cursor = initialize_db()
@@ -36,7 +37,7 @@ class CandidateUI:
             # Fetch the evaluation (persona) from the database
             cursor.execute(
                 "SELECT evaluation FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
-                (self.session_state["user_id"], "General"),  # "General" is the placeholder job role for persona
+                (candidate_id, "General"),  # "General" is the placeholder job role for persona
             )
             result = cursor.fetchone()
 

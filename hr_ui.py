@@ -9,8 +9,9 @@ from database import initialize_db, get_candidate_profile, get_resume_analysis, 
 from utils import calculate_similarity_score
 from pdf_processor import input_pdf_text
 from ai_response import  parse_roadmap
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from candidate_ui import CandidateUI 
+
+ci = CandidateUI(st.session_state)
 
 class HRUI:
     def __init__(self, session_state):
@@ -113,7 +114,7 @@ class HRUI:
         # Fetch candidates and their stored similarity scores
         conn, cursor = initialize_db()
         cursor.execute('''
-            SELECT candidate_profiles.full_name, candidate_profiles.email, resumes.similarity_score, candidate_profiles.resume_path
+            SELECT candidate_profiles.user_id, candidate_profiles.full_name, candidate_profiles.email, resumes.similarity_score, candidate_profiles.resume_path
             FROM resumes
             JOIN candidate_profiles ON resumes.candidate_profile_id = candidate_profiles.user_id
             WHERE resumes.job_role = ?
@@ -125,16 +126,18 @@ class HRUI:
             st.info(f"No candidates found for the role '{self.selected_job_role}'.")
             return
 
-        # Display results
+        # Display similarity scores
         results = []
+        candidate_options = {"Select a Candidate": None}  # Add placeholder option
         for candidate in candidates:
-            full_name, email, similarity_score, resume_path = candidate
+            user_id, full_name, email, similarity_score, resume_path = candidate
             results.append({
                 "Name": full_name,
                 "Email": email,
                 "Similarity Score": f"{similarity_score:.2f}%" if similarity_score is not None else "N/A",
                 "Resume Path": resume_path
             })
+            candidate_options[f"{full_name} ({email})"] = user_id
 
         if results:
             st.success(f"Found {len(results)} candidates for the role '{self.selected_job_role}'.")
@@ -143,6 +146,15 @@ class HRUI:
             st.markdown(df.to_html(index=False, escape=False), unsafe_allow_html=True)
         else:
             st.info(f"No candidates found for the role '{self.selected_job_role}'.")
+            return
+
+        # Dropdown to select a candidate
+        selected_candidate = st.selectbox("Select a Candidate to View Persona", list(candidate_options.keys()), index=0)
+
+        # Display persona only if a valid candidate is selected
+        if selected_candidate != "Select a Candidate":
+            candidate_id = candidate_options[selected_candidate]
+            ci.view_persona(candidate_id)
 
     def handle_screen_resumes(self):
         if st.button("Start Screening"):
@@ -192,6 +204,7 @@ class HRUI:
                 df = pd.DataFrame(new_ranked_resumes)
                 df = df[["Index", "Name", "Email", "Score", "Resume"]]
                 st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
+
 
     def handle_view_analysis(self):
         self.render_candidate_selection()
