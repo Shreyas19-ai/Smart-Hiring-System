@@ -1,7 +1,7 @@
 import sqlite3
 import hashlib
 import os
-from utils import calculate_similarity_score
+from utils import calculate_similarity_score_simple, calculate_similarity_score
 from ai_response import get_gemini_response
 from pdf_processor import input_pdf_text
 
@@ -55,6 +55,7 @@ def initialize_db():
                 roadmap TEXT,
                 application_date TEXT,
                 similarity_score REAL,
+                personalized_similarity_score REAL,
                 has_applied INTEGER DEFAULT 0,       
                 FOREIGN KEY (candidate_profile_id) REFERENCES candidate_profiles (user_id)
             )
@@ -181,11 +182,18 @@ def register_user(username, password, role, full_name, email, phone_number, educ
             job_postings = cursor.fetchall()
 
             if job_postings:
-                # Calculate similarity score for each job role and store in the database
+                # Calculate similarity scores for each job role
                 for job_role, job_description in job_postings:
+                    # Use advanced logic for shortlisting
                     similarity_score = calculate_similarity_score(resume_text, job_description)
-                    cursor.execute("INSERT INTO resumes (candidate_profile_id, job_role, similarity_score) VALUES (?, ?, ?)", 
-                                   (user_id, job_role, similarity_score))
+                    # Use simple logic for personalized recommendations
+                    personalized_similarity_score = calculate_similarity_score_simple(resume_text, job_description)
+
+                    # Store both scores in the database
+                    cursor.execute("""
+                        INSERT INTO resumes (candidate_profile_id, job_role, similarity_score, personalized_similarity_score) 
+                        VALUES (?, ?, ?, ?)
+                    """, (user_id, job_role, similarity_score, personalized_similarity_score))
             else:
                 # Mark the candidate as pending for future job postings
                 cursor.execute("INSERT INTO pending_candidates (candidate_profile_id) VALUES (?)", (user_id,))
@@ -278,33 +286,18 @@ def process_pending_scores():
             with open(resume_path, "rb") as f:
                 resume_text = f.read().decode('utf-8', errors='ignore')
             for job_role, job_description in job_postings:
+                # Calculate both scores
                 similarity_score = calculate_similarity_score(resume_text, job_description)
-                cursor.execute("INSERT INTO resumes (candidate_profile_id, job_role, similarity_score) VALUES (?, ?, ?)", 
-                               (candidate_id, job_role, similarity_score))
+                personalized_similarity_score = calculate_similarity_score_simple(resume_text, job_description)
+
+                # Store both scores in the database
+                cursor.execute("""
+                    INSERT INTO resumes (candidate_profile_id, job_role, similarity_score, personalized_similarity_score) 
+                    VALUES (?, ?, ?, ?)
+                """, (candidate_id, job_role, similarity_score, personalized_similarity_score))
             cursor.execute("DELETE FROM pending_candidates WHERE candidate_profile_id = ?", (candidate_id,))
         except FileNotFoundError:
             print(f"Resume file not found for candidate ID {candidate_id}")
-
-    # Process pending jobs
-    cursor.execute("SELECT job_role FROM pending_jobs")
-    pending_jobs = cursor.fetchall()
-
-    cursor.execute("SELECT user_id, resume_path FROM candidate_profiles")
-    candidates = cursor.fetchall()
-
-    for job_role, in pending_jobs:
-        cursor.execute("SELECT job_description FROM job_postings WHERE job_role = ?", (job_role,))
-        job_description = cursor.fetchone()[0]
-        for candidate_id, resume_path in candidates:
-            try:
-                with open(resume_path, "rb") as f:
-                    resume_text = f.read().decode('utf-8', errors='ignore')
-                similarity_score = calculate_similarity_score(resume_text, job_description)
-                cursor.execute("INSERT INTO resumes (candidate_profile_id, job_role, similarity_score) VALUES (?, ?, ?)", 
-                               (candidate_id, job_role, similarity_score))
-            except FileNotFoundError:
-                print(f"Resume file not found for candidate ID {candidate_id}")
-        cursor.execute("DELETE FROM pending_jobs WHERE job_role = ?", (job_role,))
 
     conn.commit()
     conn.close()

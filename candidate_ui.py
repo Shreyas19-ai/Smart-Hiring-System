@@ -3,6 +3,7 @@ import os
 from database import initialize_db, get_candidate_profile
 from pdf_processor import input_pdf_text
 from ai_response import get_gemini_response
+from utils import calculate_similarity_score_simple
 from utils import calculate_similarity_score
 import datetime
 import pandas as pd
@@ -223,6 +224,7 @@ class CandidateUI:
         else:
             self.display_available_jobs()
 
+
     def get_recommended_jobs(self):
         """Fetch recommended jobs based on resume similarity."""
         conn, cursor = initialize_db()
@@ -244,7 +246,8 @@ class CandidateUI:
 
             recommendations = []
             for job_id, job_role, job_description in jobs:
-                similarity_score = calculate_similarity_score(resume_text, job_description)
+                # Use the simple similarity logic for recommendations
+                similarity_score = calculate_similarity_score_simple(resume_text, job_description)
                 if similarity_score >= 80:  # Threshold for recommendations
                     recommendations.append({
                         "job_id": job_id,

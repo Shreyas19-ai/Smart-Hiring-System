@@ -127,7 +127,7 @@ class HRUI:
             return
 
         # Hardcoded threshold: 75%
-        threshold = 80
+        threshold = 75
         results = []
         candidate_options = {"Select a Candidate": None}  # Add placeholder option
         for candidate in candidates:
@@ -177,7 +177,7 @@ class HRUI:
                     st.warning(f"No candidates have applied for the '{self.selected_job_role}' job role yet.")
                     return
 
-                threshold = 80
+                threshold = 75
                 new_ranked_resumes = []
                 for i, result in enumerate(ranked_resumes):
                     full_name, email, similarity_score, resume_path = result  # Unpack tuple
