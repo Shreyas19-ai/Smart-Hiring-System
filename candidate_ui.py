@@ -28,6 +28,8 @@ class CandidateUI:
             self.view_persona(candidate_id=self.session_state["user_id"])
         elif self.session_state["current_view"] == "Update Profile":
             self.update_profile()
+        elif self.session_state["current_view"] == "Applied Jobs":  # New view for Applied Jobs
+            self.display_applied_jobs()
 
     def render_navigation(self):
         st.sidebar.title(f"Welcome, {self.session_state['username']} 👋")
@@ -37,6 +39,8 @@ class CandidateUI:
             self.session_state["current_view"] = "View Persona"
         if st.sidebar.button("Update Profile"):
             self.session_state["current_view"] = "Update Profile"
+        if st.sidebar.button("Applied Jobs"):  # New button for Applied Jobs
+            self.session_state["current_view"] = "Applied Jobs"
         if st.sidebar.button("Logout"):
             self.session_state["logged_in"] = False
             self.session_state["username"] = None
@@ -68,6 +72,34 @@ class CandidateUI:
                     st.error("❌ Failed to update profile. Please try again.")
             except Exception as e:
                 st.error(f"An error occurred while updating your profile: {e}")
+
+    def display_applied_jobs(self):
+        """Display jobs the candidate has already applied for."""
+        st.title("📋 Applied Jobs")
+        conn, cursor = initialize_db()
+
+        # Fetch applied jobs for the candidate
+        cursor.execute(
+            """
+            SELECT job_postings.job_role, job_postings.job_description
+            FROM resumes
+            JOIN job_postings ON resumes.job_role = job_postings.job_role
+            WHERE resumes.candidate_profile_id = ? AND resumes.has_applied = 1
+            """,
+            (self.session_state["user_id"],)
+        )
+        applied_jobs = cursor.fetchall()
+        conn.close()
+
+        if applied_jobs:
+            for job_role, job_description in applied_jobs:
+                st.markdown(f"### {job_role}")
+                summarized_jd = summarize_job_description(job_description)
+                with st.expander("View Job Description"):
+                    st.write(summarized_jd)
+                st.success(f"You have already applied for the '{job_role}' role.")
+        else:
+            st.info("You have not applied for any jobs yet.")
 
     def update_profile_in_db(self, resume_path):
         """Update the candidate's profile in the database."""
@@ -302,11 +334,30 @@ class CandidateUI:
             self.session_state["page"] = 0
 
         offset = self.session_state["page"] * jobs_per_page
-        cursor.execute("SELECT job_id, job_role, job_description FROM job_postings LIMIT ? OFFSET ?", (jobs_per_page, offset))
+        cursor.execute(
+            """
+            SELECT job_id, job_role, job_description
+            FROM job_postings
+            WHERE job_role NOT IN (
+                SELECT job_role FROM resumes WHERE candidate_profile_id = ? AND has_applied = 1
+            )
+            LIMIT ? OFFSET ?
+            """,
+            (self.session_state["user_id"], jobs_per_page, offset)
+        )
         jobs = cursor.fetchall()
 
         # Fetch total job count for pagination
-        cursor.execute("SELECT COUNT(*) FROM job_postings")
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+            FROM job_postings
+            WHERE job_role NOT IN (
+                SELECT job_role FROM resumes WHERE candidate_profile_id = ? AND has_applied = 1
+            )
+            """,
+            (self.session_state["user_id"],)
+        )
         total_jobs = cursor.fetchone()[0]
         conn.close()
 
@@ -317,20 +368,8 @@ class CandidateUI:
                 with st.expander("View Job Description"):
                     st.write(summarized_jd)
 
-                # Check if the candidate has already applied for this job
-                conn, cursor = initialize_db()
-                cursor.execute(
-                    "SELECT has_applied FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
-                    (self.session_state["user_id"], job_role),
-                )
-                applied_status = cursor.fetchone()
-                conn.close()
-
-                if applied_status and applied_status[0] == 1:
-                    st.warning(f"You have already applied for the '{job_role}' role.")
-                else:
-                    if st.button(f"Apply for {job_role}", key=f"apply_{job_id}"):
-                        self.apply_for_job(job_role)
+                if st.button(f"Apply for {job_role}", key=f"apply_{job_id}"):
+                    self.apply_for_job(job_role)
 
             # Pagination controls
             col1, col2, col3 = st.columns([1, 1, 1])
