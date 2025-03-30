@@ -1,7 +1,5 @@
 # AI-Powered Smart Hiring System
 
-# AI-Powered Smart Hiring System
-
 The **AI-Powered Smart Hiring System** is an innovative platform designed to simplify and enhance the hiring process for HR professionals while providing candidates with a seamless job application experience. The system leverages advanced AI capabilities to automate profile generation, candidate screening, and personalized training roadmaps, making it a unique and efficient solution for modern recruitment challenges.
 
 ---
