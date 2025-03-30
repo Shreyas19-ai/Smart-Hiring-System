@@ -66,6 +66,8 @@ def initialize_db():
             job_id INTEGER PRIMARY KEY AUTOINCREMENT,
             job_role TEXT NOT NULL,
             job_description TEXT NOT NULL,
+            job_type TEXT,
+            internship_duration INTEGER,
             posted_by INTEGER NOT NULL,
             FOREIGN KEY (posted_by) REFERENCES users (id)
         )

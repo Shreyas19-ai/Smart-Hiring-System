@@ -58,13 +58,18 @@ class HRUI:
         elif action == "Post Job Openings":
             self.handle_post_job_openings()
 
+
     def handle_post_job_openings(self):
         st.subheader("Post a New Job Opening")
         job_role = st.text_input("Job Role")
         job_description = st.text_area("Job Description")
+        job_type = st.selectbox("Job Type", ["Full-time", "Part-time", "Internship"])
+        internship_duration = None
+        if job_type == "Internship":
+            internship_duration = st.number_input("Internship Duration (in months)", min_value=1, step=1)
 
         if st.button("Post Job"):
-            if job_role and job_description:
+            if job_role and job_description and job_type:
                 conn, cursor = initialize_db()
 
                 # Check if the job role already exists
@@ -75,8 +80,10 @@ class HRUI:
                     st.warning("Job role already exists.")
                 else:
                     # Insert the new job posting
-                    cursor.execute("INSERT INTO job_postings (job_role, job_description, posted_by) VALUES (?, ?, ?)", 
-                                (job_role, job_description, self.session_state["user_id"]))
+                    cursor.execute(
+                        "INSERT INTO job_postings (job_role, job_description, job_type, internship_duration, posted_by) VALUES (?, ?, ?, ?, ?)",
+                        (job_role, job_description, job_type, internship_duration, self.session_state["user_id"]),
+                    )
 
                     # Fetch all existing candidates
                     cursor.execute("SELECT user_id, resume_path FROM candidate_profiles")
@@ -89,8 +96,10 @@ class HRUI:
                                 with open(resume_path, "rb") as f:
                                     resume_text = f.read().decode('utf-8', errors='ignore')
                                 similarity_score = calculate_similarity_score(resume_text, job_description)
-                                cursor.execute("INSERT INTO resumes (candidate_profile_id, job_role, similarity_score) VALUES (?, ?, ?)", 
-                                            (candidate_id, job_role, similarity_score))
+                                cursor.execute(
+                                    "INSERT INTO resumes (candidate_profile_id, job_role, similarity_score) VALUES (?, ?, ?)",
+                                    (candidate_id, job_role, similarity_score),
+                                )
                             except FileNotFoundError:
                                 print(f"Resume file not found for candidate ID {candidate_id}")
                     else:
@@ -101,7 +110,7 @@ class HRUI:
                     st.success("Job posted successfully!")
                 conn.close()
             else:
-                st.warning("Please fill in both the Job Role and Job Description.")
+                st.warning("Please fill in all the required fields.")
 
 
     def handle_scan_candidates(self):

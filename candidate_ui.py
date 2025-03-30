@@ -94,9 +94,19 @@ class CandidateUI:
         if applied_jobs:
             for job_role, job_description in applied_jobs:
                 st.markdown(f"### {job_role}")
-                summarized_jd = summarize_job_description(job_description)
+                try:
+                    # Attempt to summarize the job description
+                    if job_description:
+                        summarized_jd = summarize_job_description(job_description)
+                    else:
+                        summarized_jd = "No job description available."
+                except Exception as e:
+                    summarized_jd = f"Error summarizing job description: {e}"
+
+                # Display the summarized job description in a dropdown
                 with st.expander("View Job Description"):
                     st.write(summarized_jd)
+
                 st.success(f"You have already applied for the '{job_role}' role.")
         else:
             st.info("You have not applied for any jobs yet.")
@@ -236,6 +246,12 @@ class CandidateUI:
     def search_jobs(self):
         st.title("Search for Jobs")
 
+        # Add filters for job type and internship duration
+        job_type_filter = st.selectbox("Job Type", ["All", "Full-time", "Part-time", "Internship"])
+        internship_duration_filter = None
+        if job_type_filter == "Internship":
+            internship_duration_filter = st.number_input("Minimum Internship Duration (in months)", min_value=1, step=1)
+
         # Add a button to toggle between Recommended Jobs and Available Jobs
         if "show_recommended" not in self.session_state:
             self.session_state["show_recommended"] = False
@@ -252,16 +268,24 @@ class CandidateUI:
 
         # Show Recommended Jobs if toggled
         if self.session_state["show_recommended"]:
-            self.display_recommended_jobs()
+            self.display_recommended_jobs(job_type_filter, internship_duration_filter)
         else:
-            self.display_available_jobs()
-
+            self.display_available_jobs(job_type_filter, internship_duration_filter)
 
     def get_recommended_jobs(self):
         """Fetch recommended jobs based on resume similarity."""
         conn, cursor = initialize_db()
+
+        # Fetch the candidate's resume path
         cursor.execute("SELECT resume_path FROM candidate_profiles WHERE user_id = ?", (self.session_state["user_id"],))
         resume_path = cursor.fetchone()[0]
+
+        # Fetch job roles the candidate has already applied for
+        cursor.execute(
+            "SELECT job_role FROM resumes WHERE candidate_profile_id = ? AND has_applied = 1",
+            (self.session_state["user_id"],)
+        )
+        applied_jobs = {row[0] for row in cursor.fetchall()}  # Use a set for faster lookups
         conn.close()
 
         if not resume_path or not os.path.exists(resume_path):
@@ -272,12 +296,16 @@ class CandidateUI:
                 resume_text = input_pdf_text(f)
 
             conn, cursor = initialize_db()
-            cursor.execute("SELECT job_id, job_role, job_description FROM job_postings")
+            cursor.execute("SELECT job_id, job_role, job_description, job_type, internship_duration FROM job_postings")
             jobs = cursor.fetchall()
             conn.close()
 
             recommendations = []
-            for job_id, job_role, job_description in jobs:
+            for job_id, job_role, job_description, job_type, internship_duration in jobs:
+                # Skip jobs the candidate has already applied for
+                if job_role in applied_jobs:
+                    continue
+
                 # Use the simple similarity logic for recommendations
                 similarity_score = calculate_similarity_score_simple(resume_text, job_description)
                 if similarity_score >= 80:  # Threshold for recommendations
@@ -286,6 +314,8 @@ class CandidateUI:
                         "job_role": job_role,
                         "summary": summarize_job_description(job_description),
                         "similarity_score": similarity_score,
+                        "job_type": job_type,
+                        "internship_duration": internship_duration,
                     })
 
             # Sort recommendations by similarity score (descending)
@@ -295,16 +325,26 @@ class CandidateUI:
             print(f"Error generating recommendations: {e}")
             return []
 
-    def display_recommended_jobs(self):
-        """Display recommended jobs based on resume similarity."""
+    def display_recommended_jobs(self, job_type_filter=None, internship_duration_filter=None):
+        """Display recommended jobs based on resume similarity and filters."""
         st.subheader("🔍 Recommended Jobs for You")
         recommended_jobs = self.get_recommended_jobs()
 
+        # Apply filters to the recommended jobs
+        if job_type_filter and job_type_filter != "All":
+            recommended_jobs = [
+                job for job in recommended_jobs if job.get("job_type") == job_type_filter
+            ]
+        if internship_duration_filter:
+            recommended_jobs = [
+                job for job in recommended_jobs if job.get("internship_duration", 0) >= internship_duration_filter
+            ]
+
         if recommended_jobs:
             for job in recommended_jobs:
-                st.markdown(f"### {job['job_role']}")
+                st.markdown(f"### {job['job_role']} ({job.get('job_type', 'N/A')})")
                 with st.expander("View Job Description"):
-                    st.write(job['summary'])
+                    st.write(job['summary'])  # Display the summarized job description in the dropdown
 
                 # Check if the candidate has already applied for this job
                 conn, cursor = initialize_db()
@@ -321,30 +361,40 @@ class CandidateUI:
                     if st.button(f"Apply for {job['job_role']}", key=f"apply_recommended_{job['job_id']}"):
                         self.apply_for_job(job['job_role'])
         else:
-            st.info("No personalized recommendations available at the moment.")
+            st.info("No personalized recommendations available based on the selected filters.")
 
-    def display_available_jobs(self):
-        """Display all available jobs with pagination."""
+    def display_available_jobs(self, job_type_filter, internship_duration_filter):
+        """Display all available jobs with pagination and filters."""
         st.subheader("📋 Available Jobs")
 
-        # Fetch all jobs with pagination
+        # Fetch all jobs with pagination and filters
         conn, cursor = initialize_db()
         jobs_per_page = 10
         if "page" not in self.session_state:
             self.session_state["page"] = 0
 
         offset = self.session_state["page"] * jobs_per_page
-        cursor.execute(
-            """
-            SELECT job_id, job_role, job_description
+        query = """
+            SELECT job_id, job_role, job_description, job_type, internship_duration
             FROM job_postings
             WHERE job_role NOT IN (
                 SELECT job_role FROM resumes WHERE candidate_profile_id = ? AND has_applied = 1
             )
-            LIMIT ? OFFSET ?
-            """,
-            (self.session_state["user_id"], jobs_per_page, offset)
-        )
+        """
+        params = [self.session_state["user_id"]]
+
+        # Apply filters
+        if job_type_filter != "All":
+            query += " AND job_type = ?"
+            params.append(job_type_filter)
+        if internship_duration_filter:
+            query += " AND (internship_duration >= ? OR internship_duration IS NULL)"
+            params.append(internship_duration_filter)
+
+        query += " LIMIT ? OFFSET ?"
+        params.extend([jobs_per_page, offset])
+
+        cursor.execute(query, tuple(params))
         jobs = cursor.fetchall()
 
         # Fetch total job count for pagination
@@ -355,34 +405,34 @@ class CandidateUI:
             WHERE job_role NOT IN (
                 SELECT job_role FROM resumes WHERE candidate_profile_id = ? AND has_applied = 1
             )
-            """,
-            (self.session_state["user_id"],)
+        """
+            + (" AND job_type = ?" if job_type_filter != "All" else "")
+            + (" AND (internship_duration >= ? OR internship_duration IS NULL)" if internship_duration_filter else ""),
+            tuple(params[:-2]),
         )
         total_jobs = cursor.fetchone()[0]
         conn.close()
 
         if jobs:
-            for job_id, job_role, job_description in jobs:
-                st.markdown(f"### {job_role}")
+            for job_id, job_role, job_description, job_type, internship_duration in jobs:
+                st.markdown(f"### {job_role} ({job_type})")
                 summarized_jd = summarize_job_description(job_description)
                 with st.expander("View Job Description"):
                     st.write(summarized_jd)
-
-                if st.button(f"Apply for {job_role}", key=f"apply_{job_id}"):
+                if job_type == "Internship" and internship_duration:
+                    st.write(f"Duration: {internship_duration} months")
+                if st.button("Apply", key=f"apply_{job_id}"):
                     self.apply_for_job(job_role)
 
-            # Pagination controls
             col1, col2, col3 = st.columns([1, 1, 1])
             with col1:
                 if self.session_state["page"] > 0:
                     if st.button("Previous"):
                         self.session_state["page"] -= 1
-                        st.experimental_rerun()
             with col3:
-                if offset + jobs_per_page < total_jobs:
+                if (self.session_state["page"] + 1) * jobs_per_page < total_jobs:
                     if st.button("Next"):
                         self.session_state["page"] += 1
-                        st.experimental_rerun()
         else:
             st.info("No job postings available at the moment.")
 
