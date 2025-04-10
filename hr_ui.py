@@ -5,10 +5,10 @@ import os
 import re
 import base64
 
-from database import initialize_db, get_candidate_profile, get_resume_analysis, get_application_resumes
+from database import initialize_db, hire_candidate
 from utils import calculate_similarity_score
 from pdf_processor import input_pdf_text
-from ai_response import  parse_roadmap
+from ai_response import parse_roadmap, generate_roadmap_for_candidate
 from candidate_ui import CandidateUI 
 
 ci = CandidateUI(st.session_state)
@@ -47,17 +47,222 @@ class HRUI:
             self.selected_job_role = None
 
     def render_actions(self):
-        action = st.radio("Select Action", ["Screen Resumes", "View Analysis", "Scan Candidates", "Post Job Openings"])
+        action = st.radio("Select Action", ["Screen Resumes", "View Analysis", "Generate Training Roadmaps", "Scan Candidates", "Post Job Openings"])
 
         if action == "Screen Resumes":
             self.handle_screen_resumes()
         elif action == "View Analysis":
             self.handle_view_analysis()
+        elif action == "Generate Training Roadmaps":
+            self.handle_generate_training_roadmaps()
         elif action == "Scan Candidates":
             self.handle_scan_candidates()
         elif action == "Post Job Openings":
             self.handle_post_job_openings()
 
+    def handle_generate_training_roadmaps(self):
+        st.subheader("🗺️ Generate Training Roadmaps")
+        
+        # Add a radio button to select between candidates and employees
+        target_audience = st.radio("Select Target Audience", ["Employees", "All Candidates"])
+        
+        # Allow HR to enter job description or select from existing roles
+        jd_input_method = st.radio("Input Method", ["Enter New Job Description", "Select Existing Job Role"])
+        
+        job_description = None
+        job_role = None
+        
+        if jd_input_method == "Enter New Job Description":
+            job_role = st.text_input("Job Role Title")
+            job_description = st.text_area("Job Description", height=200, 
+                                          placeholder="Enter the job description here. Include required skills, responsibilities, and qualifications.")
+            if not job_role or not job_description:
+                st.warning("Please enter both a job role title and description.")
+                return
+        else:
+            # Use existing job role selection
+            conn, cursor = initialize_db()
+            cursor.execute("SELECT job_role FROM job_postings WHERE posted_by = ?", (self.session_state["user_id"],))
+            job_roles_list = [row[0] for row in cursor.fetchall()]
+            conn.close()
+            
+            if not job_roles_list:
+                st.warning("You have not posted any job openings yet. Please enter a new job description instead.")
+                return
+                
+            job_role = st.selectbox("Select Job Role", job_roles_list)
+            
+            # Fetch the job description for the selected role
+            conn, cursor = initialize_db()
+            cursor.execute("SELECT job_description FROM job_postings WHERE job_role = ?", (job_role,))
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result:
+                job_description = result[0]
+                st.info(f"Using job description for: {job_role}")
+            else:
+                st.error("Could not retrieve job description for the selected role.")
+                return
+        
+        # Get candidates based on selection (employees or all candidates)
+        conn, cursor = initialize_db()
+        if target_audience == "Employees":
+            cursor.execute('''
+                SELECT user_id, full_name, resume_path 
+                FROM candidate_profiles
+                WHERE is_employee = 1
+            ''')
+        else:
+            cursor.execute('''
+                SELECT user_id, full_name, resume_path 
+                FROM candidate_profiles
+            ''')
+        candidates = cursor.fetchall()
+        conn.close()
+        
+        if not candidates:
+            if target_audience == "Employees":
+                st.warning("No employees found in the system. Hire candidates first.")
+            else:
+                st.warning("No candidates found in the system.")
+            return
+            
+        # Button to generate roadmaps for all candidates
+        if st.button("Analyze All"):
+            with st.spinner(f"Generating training roadmaps for all {target_audience.lower()}..."):
+                # Store the generated roadmaps in session state
+                if "candidate_roadmaps" not in self.session_state:
+                    self.session_state["candidate_roadmaps"] = {}
+                    
+                for candidate_id, full_name, resume_path in candidates:
+                    try:
+                        # Check if the resume file exists
+                        if not os.path.exists(resume_path):
+                            st.warning(f"Resume file not found for {full_name}")
+                            continue
+                            
+                        # Read the resume text
+                        with open(resume_path, "rb") as f:
+                            resume_text = input_pdf_text(f)
+                            
+                        # Generate roadmap for this candidate based on the job description
+                        roadmap = generate_roadmap_for_candidate(resume_text, job_description)
+                        
+                        # Parse the roadmap and store it
+                        roadmap_parsed = parse_roadmap(roadmap)
+                        self.session_state["candidate_roadmaps"][candidate_id] = {
+                            "name": full_name,
+                            "roadmap": roadmap,
+                            "parsed": roadmap_parsed
+                        }
+                    except Exception as e:
+                        st.error(f"Error processing {full_name}'s resume: {str(e)}")
+                
+                st.success(f"✅ Generated roadmaps for {len(self.session_state['candidate_roadmaps'])} {target_audience.lower()}!")
+        
+        # Display dropdown to select a candidate if roadmaps have been generated
+        if "candidate_roadmaps" in self.session_state and self.session_state["candidate_roadmaps"]:
+            candidate_options = {data["name"]: candidate_id for candidate_id, data in self.session_state["candidate_roadmaps"].items()}
+            selected_candidate_name = st.selectbox("Select to View Roadmap", list(candidate_options.keys()))
+            
+            if selected_candidate_name:
+                selected_candidate_id = candidate_options[selected_candidate_name]
+                roadmap_data = self.session_state["candidate_roadmaps"][selected_candidate_id]
+                
+                # Get the candidate's persona
+                conn, cursor = initialize_db()
+                cursor.execute(
+                    "SELECT evaluation FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
+                    (selected_candidate_id, "General")
+                )
+                persona = cursor.fetchone()
+                conn.close()
+                
+                # Create tabs for roadmap and persona
+                tab1, tab2 = st.tabs(["Training Roadmap", "Persona"])
+                
+                with tab1:
+                    # Display the roadmap for the selected candidate
+                    self.display_candidate_roadmap(roadmap_data["parsed"])
+                
+                with tab2:
+                    # Display the persona
+                    self.display_persona(persona)
+            
+            # Add notification button
+            if st.button("Notify About Roadmaps"):
+                with st.spinner("Sending notifications..."):
+                    conn, cursor = initialize_db()
+                    
+                    # Save roadmaps to database for each candidate
+                    for candidate_id, data in self.session_state["candidate_roadmaps"].items():
+                        # Check if a roadmap entry already exists for this candidate and job role
+                        cursor.execute(
+                            "SELECT id FROM roadmap_notifications WHERE candidate_id = ? AND job_role = ?",
+                            (candidate_id, job_role)
+                        )
+                        existing_entry = cursor.fetchone()
+                        
+                        roadmap_json = str(data["roadmap"])
+                        
+                        if existing_entry:
+                            # Update existing entry
+                            cursor.execute(
+                                "UPDATE roadmap_notifications SET roadmap = ?, notification_date = CURRENT_TIMESTAMP, is_read = 0 WHERE id = ?",
+                                (roadmap_json, existing_entry[0])
+                            )
+                        else:
+                            # Create new entry
+                            cursor.execute(
+                                "INSERT INTO roadmap_notifications (candidate_id, job_role, roadmap, notification_date, is_read) VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0)",
+                                (candidate_id, job_role, roadmap_json)
+                            )
+                    
+                    conn.commit()
+                    conn.close()
+                    
+                    st.success(f"✅ Notifications sent to {len(self.session_state['candidate_roadmaps'])} {target_audience.lower()}!")
+
+    def display_candidate_roadmap(self, roadmap_parsed):
+        tab1, tab2 = st.tabs(["📚 Training Roadmap", "📈 Learning Resources"])
+        
+        with tab1:
+            # Collapsible Section: Missing Skills
+            with st.expander("🔍 Missing Skills", expanded=True):
+                if roadmap_parsed["missing_skills"]:
+                    st.write("Here are the key skills the candidate needs to focus on:")
+                    for skill in roadmap_parsed["missing_skills"]:
+                        st.write(f"- {skill}")
+                else:
+                    st.warning("No missing skills identified.")
+
+            # Collapsible Section: Step-by-Step Roadmap
+            with st.expander("🗺️ Step-by-Step Learning Roadmap", expanded=True):
+                if roadmap_parsed["roadmap_steps"]:
+                    st.write("Recommended learning plan:")
+                    for step in roadmap_parsed["roadmap_steps"]:
+                        st.write(f"- {step}")
+                else:
+                    st.warning("No roadmap steps found.")
+        
+        with tab2:
+            with st.expander("🎓 Free Course Links", expanded=True):
+                if roadmap_parsed["free_courses"]:
+                    st.write("Free resources to recommend:")
+                    for name, link in roadmap_parsed["free_courses"]:
+                        st.markdown(f"- [{name}]({link})")
+                else:
+                    st.warning("No free courses found.")
+
+            # Collapsible Section: Paid Courses
+            with st.expander("💳 Paid Course Links", expanded=True):
+                if roadmap_parsed["paid_courses"]:
+                    st.write("Paid resources for deeper learning:")
+                    for name, link in roadmap_parsed["paid_courses"]:
+                        st.markdown(f"- [{name}]({link})")
+                else:
+                    st.warning("No paid courses found.")
 
     def handle_post_job_openings(self):
         st.subheader("Post a New Job Opening")
@@ -136,7 +341,7 @@ class HRUI:
             return
 
         # Hardcoded threshold: 75%
-        threshold = 75
+        threshold = 30
         results = []
         candidate_options = {"Select a Candidate": None}  # Add placeholder option
         for candidate in candidates:
@@ -167,6 +372,7 @@ class HRUI:
             candidate_id = candidate_options[selected_candidate]
             ci.view_persona(candidate_id)
 
+
     def handle_screen_resumes(self):
         if st.button("Start Screening"):
             self.clear_session_state()
@@ -186,7 +392,7 @@ class HRUI:
                     st.warning(f"No candidates have applied for the '{self.selected_job_role}' job role yet.")
                     return
 
-                threshold = 75
+                threshold = 0
                 new_ranked_resumes = []
                 for i, result in enumerate(ranked_resumes):
                     full_name, email, similarity_score, resume_path = result  # Unpack tuple
@@ -233,7 +439,8 @@ class HRUI:
             # Fetch candidates and their persona (evaluation) for the selected job role
             cursor.execute(
                 """
-                SELECT DISTINCT candidate_profiles.full_name, resumes.candidate_profile_id, resumes.evaluation
+                SELECT DISTINCT candidate_profiles.full_name, resumes.candidate_profile_id, resumes.evaluation, 
+                candidate_profiles.is_employee
                 FROM resumes
                 JOIN candidate_profiles ON resumes.candidate_profile_id = candidate_profiles.user_id
                 WHERE resumes.job_role = ? AND resumes.has_applied = 1
@@ -245,30 +452,61 @@ class HRUI:
 
             candidate_data = []
             if results:
-                for full_name, candidate_profile_id, evaluation in results:  # Unpack all three values
+                for full_name, candidate_profile_id, evaluation, is_employee in results:  # Unpack all values
                     if evaluation:
                         name_match = re.search(r"\| Name \| (.+?) \|", evaluation)  # Extract name from evaluation
                         if name_match:
-                            candidate_data.append((name_match.group(1).strip(), candidate_profile_id))
+                            candidate_data.append((name_match.group(1).strip(), candidate_profile_id, is_employee))
                         else:
-                            candidate_data.append((full_name, candidate_profile_id))  # Fallback to full_name
+                            candidate_data.append((full_name, candidate_profile_id, is_employee))  # Fallback to full_name
                     else:
-                        candidate_data.append((full_name, candidate_profile_id))  # Fallback to full_name
+                        candidate_data.append((full_name, candidate_profile_id, is_employee))  # Fallback to full_name
 
             if candidate_data:
-                candidate_names, candidate_ids = zip(*candidate_data)
+                # Unpack the data including employee status
+                candidate_names, candidate_ids, employee_statuses = zip(*candidate_data)
                 self.candidate_names = candidate_names
                 self.candidate_ids = candidate_ids
+                self.employee_statuses = employee_statuses
 
-                self.selected_candidate_name = st.selectbox(
-                    "Select Candidate", candidate_names, index=None, placeholder="Select Candidate"
+                # Create a formatted list for the selectbox with employee status indicators
+                display_names = [
+                    f"{name} {'(Employee)' if is_employee else ''}" 
+                    for name, is_employee in zip(candidate_names, employee_statuses)
+                ]
+
+                selected_index = st.selectbox(
+                    "Select Candidate", display_names, index=None, placeholder="Select Candidate"
                 )
 
-                if st.button("View Analysis"):
-                    if self.selected_candidate_name:
-                        self.selected_candidate_id = candidate_ids[candidate_names.index(self.selected_candidate_name)]
-                    else:
-                        st.warning("Please select a candidate.")
+                if selected_index is not None:
+                    # Get the index of the selected candidate
+                    selected_idx = display_names.index(selected_index)
+                    self.selected_candidate_name = candidate_names[selected_idx]
+                    self.selected_candidate_id = candidate_ids[selected_idx]
+                    self.is_employee = employee_statuses[selected_idx]
+                    
+                    # Display analysis and hire button in columns
+                    col1, col2 = st.columns([1, 1])
+                    
+                    with col1:
+                        if st.button("View Analysis"):
+                            if self.selected_candidate_name:
+                                # Set the selected candidate ID for rendering analysis
+                                pass
+                            else:
+                                st.warning("Please select a candidate.")
+                    
+                    with col2:
+                        # Only show hire button if not already an employee
+                        if not self.is_employee:
+                            if st.button(f"Hire {self.selected_candidate_name}"):
+                                # Call function to hire the candidate
+                                if hire_candidate(self.selected_candidate_id, self.selected_job_role):
+                                    st.success(f"✅ {self.selected_candidate_name} has been hired as an employee!")
+                                    st.info("You can now create training roadmaps for this employee.")
+                                    # Force refresh to update the UI
+                                    st.rerun()
             else:
                 st.warning(f"No candidates have applied for the '{self.selected_job_role}' role yet.")
         else:
@@ -282,8 +520,8 @@ class HRUI:
             cursor.execute("SELECT evaluation FROM resumes WHERE candidate_profile_id = ?", (self.selected_candidate_id,))
             persona_result = cursor.fetchone()
 
-            # Fetch match_response and roadmap based on job role
-            cursor.execute("SELECT match_response, roadmap FROM resumes WHERE candidate_profile_id = ? AND job_role = ?", (self.selected_candidate_id, self.selected_job_role))
+            # Fetch match_response based on job role
+            cursor.execute("SELECT match_response FROM resumes WHERE candidate_profile_id = ? AND job_role = ?", (self.selected_candidate_id, self.selected_job_role))
             analysis_result = cursor.fetchone()
             conn.close()
 
@@ -293,31 +531,20 @@ class HRUI:
                 self.session_state["evaluation"] = None
 
             if analysis_result:
-                self.session_state["match_response"], self.session_state["roadmap"] = analysis_result
-
-                if "roadmap" in self.session_state and self.session_state["roadmap"] is not None:
-                    roadmap_parsed = parse_roadmap(self.session_state["roadmap"])
-                    self.session_state["free_courses"] = roadmap_parsed["free_courses"]
-                    self.session_state["paid_courses"] = roadmap_parsed["paid_courses"]
-                else:
-                    roadmap_parsed = {"missing_skills": [], "free_courses": [], "paid_courses": [], "roadmap_steps": []}
-
-                # Corrected call to display_analysis_tabs
-                self.display_analysis_tabs(roadmap_parsed)
+                self.session_state["match_response"] = analysis_result[0]
+                
+                # Display only the persona and compatibility tabs
+                self.display_analysis_tabs()
             else:
                 st.error("Could not retrieve analysis.")
                 
-    def display_analysis_tabs(self, roadmap_parsed):
-        tab1, tab2, tab3, tab4 = st.tabs(["📋 User Persona", "📊 Compatibility Score", "📚 Learning Pathway", "📈 Progress Tracking"])
+    def display_analysis_tabs(self):
+        tab1, tab2 = st.tabs(["📋 User Persona", "📊 Compatibility Score"])
 
         with tab1:
             self.display_persona(tab1)
         with tab2:
             self.display_compatibility(tab2)
-        with tab3:
-            self.display_learning_pathway(tab3, roadmap_parsed)
-        with tab4:
-            self.display_progress_tracking(tab4, roadmap_parsed)
 
     def clear_session_state(self):
         if "evaluation" in self.session_state:
@@ -330,6 +557,8 @@ class HRUI:
             del self.session_state["free_courses"]
         if "paid_courses" in self.session_state:
             del self.session_state["paid_courses"]
+        if "candidate_roadmaps" in self.session_state:
+            del self.session_state["candidate_roadmaps"]
 
     def display_persona(self, tab):
         st.subheader("📝 User Persona")
@@ -402,7 +631,7 @@ class HRUI:
                 st.write(st.session_state["match_response"])
 
     def display_learning_pathway(self, tab, roadmap_parsed):
-        st.subheader("📚 Learning Pathway")
+        st.subheader("📚 Training Roadmap")
         # Collapsible Section: Missing Skills
         with st.expander("🔍 Missing Skills"):
             if roadmap_parsed["missing_skills"]:

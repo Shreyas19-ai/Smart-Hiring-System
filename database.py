@@ -4,6 +4,7 @@ import os
 from utils import calculate_similarity_score_simple, calculate_similarity_score
 from ai_response import get_gemini_response
 from pdf_processor import input_pdf_text
+import datetime
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
@@ -40,9 +41,34 @@ def initialize_db():
                 experience TEXT,
                 resume_path TEXT,
                 additional_information TEXT,
+                is_employee INTEGER DEFAULT 0,
+                hire_date TEXT,
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
+        
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS employee_roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            employee_id INTEGER NOT NULL,
+            job_role TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT,
+            FOREIGN KEY (employee_id) REFERENCES candidate_profiles (user_id)
+        )
+    ''')
+
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS roadmap_notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            candidate_id INTEGER NOT NULL,
+            job_role TEXT NOT NULL,
+            roadmap TEXT,
+            notification_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_read INTEGER DEFAULT 0,
+            FOREIGN KEY (candidate_id) REFERENCES candidate_profiles (user_id)
+        )
+    ''')
 
         # Create resumes table
         cursor.execute('''
@@ -303,3 +329,72 @@ def process_pending_scores():
 
     conn.commit()
     conn.close()
+
+def get_candidate_roadmaps(candidate_id):
+    conn, cursor = initialize_db()
+    cursor.execute('''
+        SELECT id, job_role, roadmap, notification_date, is_read 
+        FROM roadmap_notifications 
+        WHERE candidate_id = ? 
+        ORDER BY notification_date DESC
+    ''', (candidate_id,))
+    roadmaps = cursor.fetchall()
+    conn.close()
+    return roadmaps
+
+# Add a function to mark a notification as read
+def mark_roadmap_as_read(notification_id):
+    conn, cursor = initialize_db()
+    cursor.execute("UPDATE roadmap_notifications SET is_read = 1 WHERE id = ?", (notification_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+def hire_candidate(candidate_id, job_role):
+    """
+    Mark a candidate as hired (employee) and record the hire date
+    """
+    conn, cursor = initialize_db()
+    hire_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    
+    # Update the candidate profile to mark as employee
+    cursor.execute(
+        "UPDATE candidate_profiles SET is_employee = 1, hire_date = ? WHERE user_id = ?",
+        (hire_date, candidate_id)
+    )
+    
+    # Record the job role they were hired for
+    cursor.execute(
+        "INSERT INTO employee_roles (employee_id, job_role, start_date) VALUES (?, ?, ?)",
+        (candidate_id, job_role, hire_date)
+    )
+    
+    conn.commit()
+    conn.close()
+    return True
+
+# Create a function to get all employees
+def get_all_employees():
+    """
+    Get all users who are marked as employees
+    """
+    conn, cursor = initialize_db()
+    cursor.execute('''
+        SELECT user_id, full_name, email, resume_path, hire_date 
+        FROM candidate_profiles 
+        WHERE is_employee = 1
+    ''')
+    employees = cursor.fetchall()
+    conn.close()
+    return employees
+
+# Create a function to check if a user is an employee
+def is_employee(user_id):
+    """
+    Check if a user is an employee
+    """
+    conn, cursor = initialize_db()
+    cursor.execute("SELECT is_employee FROM candidate_profiles WHERE user_id = ?", (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] == 1 if result else False

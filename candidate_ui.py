@@ -1,8 +1,8 @@
 import streamlit as st
 import os
-from database import initialize_db, get_candidate_profile
+from database import initialize_db, get_candidate_profile, get_candidate_roadmaps, mark_roadmap_as_read, is_employee
 from pdf_processor import input_pdf_text
-from ai_response import get_gemini_response
+from ai_response import generate_roadmap_for_candidate, get_gemini_response, parse_roadmap
 from utils import calculate_similarity_score_simple
 from utils import calculate_similarity_score
 import datetime
@@ -28,23 +28,140 @@ class CandidateUI:
             self.view_persona(candidate_id=self.session_state["user_id"])
         elif self.session_state["current_view"] == "Update Profile":
             self.update_profile()
-        elif self.session_state["current_view"] == "Applied Jobs":  # New view for Applied Jobs
+        elif self.session_state["current_view"] == "Applied Jobs":
             self.display_applied_jobs()
+        elif self.session_state["current_view"] == "Training Roadmaps":
+            self.display_training_roadmaps()
 
     def render_navigation(self):
         st.sidebar.title(f"Welcome, {self.session_state['username']} 👋")
+        
+        # Check if the user is an employee
+        is_emp = is_employee(self.session_state["user_id"])
+        
+        # Get unread roadmap count
+        conn, cursor = initialize_db()
+        cursor.execute("SELECT COUNT(*) FROM roadmap_notifications WHERE candidate_id = ? AND is_read = 0", 
+                      (self.session_state["user_id"],))
+        unread_count = cursor.fetchone()[0]
+        conn.close()
+        
+        # Display status badge
+        if is_emp:
+            st.sidebar.success("Status: Employee")
+        else:
+            st.sidebar.info("Status: Candidate")
+        
         if st.sidebar.button("Search Jobs"):
             self.session_state["current_view"] = "Search Jobs"
         if st.sidebar.button("View Persona"):
             self.session_state["current_view"] = "View Persona"
         if st.sidebar.button("Update Profile"):
             self.session_state["current_view"] = "Update Profile"
-        if st.sidebar.button("Applied Jobs"):  # New button for Applied Jobs
+        if st.sidebar.button("Applied Jobs"):
             self.session_state["current_view"] = "Applied Jobs"
+            
+        # Add notification badge if there are unread roadmaps
+        roadmap_button_text = "Training Roadmaps"
+        if unread_count > 0:
+            roadmap_button_text = f"Training Roadmaps 🔔 ({unread_count})"
+            
+        if st.sidebar.button(roadmap_button_text):
+            self.session_state["current_view"] = "Training Roadmaps"
+            
         if st.sidebar.button("Logout"):
             self.session_state["logged_in"] = False
             self.session_state["username"] = None
             st.rerun()
+
+    def display_training_roadmaps(self):
+        st.title("🗺️ Your Training Roadmaps")
+        st.write("View personalized learning paths created by HR to help you develop your skills.")
+        
+        # Get roadmap notifications for this candidate
+        roadmaps = get_candidate_roadmaps(self.session_state["user_id"])
+        
+        if not roadmaps:
+            st.info("You don't have any training roadmaps yet.")
+            return
+        
+        # Create tabs for each roadmap
+        roadmap_tabs = {}
+        for roadmap_id, job_role, roadmap_text, notification_date, is_read in roadmaps:
+            # Format the date
+            date_str = notification_date.split()[0] if notification_date else "Unknown date"
+            
+            # Add unread indicator
+            tab_label = f"{job_role} ({date_str})"
+            if is_read == 0:
+                tab_label = f"🔔 {tab_label}"
+                
+            roadmap_tabs[tab_label] = (roadmap_id, job_role, roadmap_text, is_read)
+        
+        # Create tabs
+        if roadmap_tabs:
+            tab_labels = list(roadmap_tabs.keys())
+            tabs = st.tabs(tab_labels)
+            
+            for i, tab in enumerate(tabs):
+                roadmap_id, job_role, roadmap_text, is_read = roadmap_tabs[tab_labels[i]]
+                
+                with tab:
+                    # Mark as read when opened
+                    if is_read == 0:
+                        mark_roadmap_as_read(roadmap_id)
+                    
+                    st.subheader(f"Training Roadmap for: {job_role}")
+                    
+                    # Parse the roadmap text
+                    try:
+                        roadmap_parsed = parse_roadmap(roadmap_text)
+                        
+                        # Display the roadmap content
+                        self.display_roadmap_content(roadmap_parsed)
+                    except Exception as e:
+                        st.error(f"Error displaying roadmap: {str(e)}")
+                        st.write(roadmap_text)
+    
+    def display_roadmap_content(self, roadmap_parsed):
+        tab1, tab2 = st.tabs(["📚  Pathway", "📈 Learning Resources"])
+        
+        with tab1:
+            # Collapsible Section: Missing Skills
+            with st.expander("🔍 Missing Skills", expanded=True):
+                if roadmap_parsed["missing_skills"]:
+                    st.write("Here are the key skills you need to focus on:")
+                    for skill in roadmap_parsed["missing_skills"]:
+                        st.write(f"- {skill}")
+                else:
+                    st.warning("No missing skills identified.")
+
+            # Collapsible Section: Step-by-Step Roadmap
+            with st.expander("🗺️ Step-by-Step Learning Roadmap", expanded=True):
+                if roadmap_parsed["roadmap_steps"]:
+                    st.write("Follow this structured plan to upskill effectively:")
+                    for step in roadmap_parsed["roadmap_steps"]:
+                        st.write(f"- {step}")
+                else:
+                    st.warning("No roadmap steps found.")
+        
+        with tab2:
+            with st.expander("🎓 Free Course Links", expanded=True):
+                if roadmap_parsed["free_courses"]:
+                    st.write("Here are some free resources to get started:")
+                    for name, link in roadmap_parsed["free_courses"]:
+                        st.markdown(f"- [{name}]({link})")
+                else:
+                    st.warning("No free courses found.")
+
+            # Collapsible Section: Paid Courses
+            with st.expander("💳 Paid Course Links", expanded=True):
+                if roadmap_parsed["paid_courses"]:
+                    st.write("Here are some paid resources for deeper learning:")
+                    for name, link in roadmap_parsed["paid_courses"]:
+                        st.markdown(f"- [{name}]({link})")
+                else:
+                    st.warning("No paid courses found.")
 
     def update_profile(self):
         """Allow candidates to update their profile by re-uploading a new resume."""
@@ -450,7 +567,7 @@ class CandidateUI:
 
                 # Check if the candidate already has a record for the selected job role
                 cursor.execute(
-                    "SELECT id FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
+                    "SELECT id, match_response, roadmap FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
                     (self.session_state["user_id"], selected_role),
                 )
                 existing_record = cursor.fetchone()
@@ -461,6 +578,15 @@ class CandidateUI:
                         "UPDATE resumes SET has_applied = 1, application_date = ? WHERE candidate_profile_id = ? AND job_role = ?",
                         (datetime.datetime.now(), self.session_state["user_id"], selected_role),
                     )
+                    
+                    # Use existing match_response and roadmap if available
+                    if existing_record[1] and existing_record[2]:
+                        self.session_state["match_response"] = existing_record[1]
+                        self.session_state["roadmap"] = existing_record[2]
+                        conn.commit()
+                        conn.close()
+                        st.success("✅ Application submitted successfully!")
+                        return
                 else:
                     # Insert a new record if it doesn't exist
                     cursor.execute(
@@ -494,21 +620,15 @@ class CandidateUI:
                         JD:{jd}
                         Resume:{text}
                         Output the table in markdown format.
-                    """,
-                    "roadmap": """
-                        Suggest a structured learning plan to fill skill gaps.
-                        - **Missing Skills** (List only key missing skills)
-                        - **Free Course Links** (For each missing skill and its link and name only, no description)
-                        - **Paid Course Links** (For each missing skill and its link and name only, no description)
-                        - **Step-by-Step Learning Roadmap** - Mention learning steps **along with estimated time required (in weeks/months)**
-                        Resume: {text}
-                        JD: {jd}
                     """
                 }
 
-                for key in input_prompts:
-                    prompt = input_prompts[key].format(text=resume_text, jd=selected_role)
-                    self.session_state[key] = get_gemini_response(prompt, resume_text, selected_role)
+                # Generate match_response
+                prompt = input_prompts["match_response"].format(text=resume_text, jd=selected_role)
+                self.session_state["match_response"] = get_gemini_response(prompt, resume_text, selected_role)
+                
+                # Generate roadmap using the dedicated function
+                self.session_state["roadmap"] = generate_roadmap_for_candidate(resume_text, selected_role)
 
                 cursor.execute(
                     "UPDATE resumes SET match_response = ?, roadmap = ? WHERE candidate_profile_id = ? AND job_role = ?",
