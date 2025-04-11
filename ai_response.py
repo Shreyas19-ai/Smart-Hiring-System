@@ -12,7 +12,7 @@ load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 def get_gemini_response(prompt, resume_text, jd_text):
-    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+    model = genai.GenerativeModel('gemini-2.0-flash-lite')
     response = model.generate_content(prompt)
     return response.text if response and response.text else "No response generated."
 
@@ -43,7 +43,7 @@ def extract_details_with_gemini(resume_text):
         """
 
         # Generate response using Gemini
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-2.0-flash-lite')
         response = model.generate_content(prompt)
         print(f"Gemini API Response: {response}")
 
@@ -159,7 +159,7 @@ def generate_roadmap_for_candidate(resume_text, job_description):
         """
         
         # Generate the roadmap using Gemini
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-2.0-flash-lite')
         response = model.generate_content(roadmap_prompt)
         return response.text if response and response.text else "No roadmap generated."
     except Exception as e:

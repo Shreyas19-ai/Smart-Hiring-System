@@ -565,85 +565,85 @@ class CandidateUI:
 
                 conn, cursor = initialize_db()
 
-                # Check if the candidate already has a record for the selected job role
-                cursor.execute(
-                    "SELECT id, match_response, roadmap FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
-                    (self.session_state["user_id"], selected_role),
-                )
-                existing_record = cursor.fetchone()
-
-                if existing_record:
-                    # Update the has_applied column if the record already exists
+                try:
+                    # Check if the candidate already has a record for the selected job role
                     cursor.execute(
-                        "UPDATE resumes SET has_applied = 1, application_date = ? WHERE candidate_profile_id = ? AND job_role = ?",
-                        (datetime.datetime.now(), self.session_state["user_id"], selected_role),
+                        "SELECT id, match_response, roadmap FROM resumes WHERE candidate_profile_id = ? AND job_role = ?",
+                        (self.session_state["user_id"], selected_role),
                     )
+                    existing_record = cursor.fetchone()
+
+                    if existing_record:
+                        # Update the has_applied column if the record already exists
+                        cursor.execute(
+                            "UPDATE resumes SET has_applied = 1, application_date = ? WHERE candidate_profile_id = ? AND job_role = ?",
+                            (datetime.datetime.now(), self.session_state["user_id"], selected_role),
+                        )
+                        
+                        # Use existing match_response and roadmap if available
+                        if existing_record[1] and existing_record[2]:
+                            self.session_state["match_response"] = existing_record[1]
+                            self.session_state["roadmap"] = existing_record[2]
+                            conn.commit()
+                            return
+                    else:
+                        # Insert a new record if it doesn't exist
+                        cursor.execute(
+                            "INSERT INTO resumes (candidate_profile_id, job_role, application_date, has_applied) VALUES (?, ?, ?, ?)",
+                            (self.session_state["user_id"], selected_role, datetime.datetime.now(), 1),
+                        )
+
+                    # Generate match_response and roadmap
+                    input_prompts = {
+                        "match_response": """
+                            You are an AI assistant designed to analyze resumes against job descriptions.
+                            Analyze the following resume and job description.
+                            Evaluate the resume based on the following core categories:
+                            * Core Skills
+                            * Education
+                            * Industry Experience
+                            * Projects
+                            In addition to these core categories, identify 2-3 more categories that are highly relevant to this specific job description. Examples of additional categories include: AI/ML Development, Application of AI/ML, Deployment, Key Strengths, Areas for Focus, Communication Skills, Leadership Experience, Research Experience, etc.
+                            For each identified category (both core and additional):
+                            1. Assess the strength of alignment between the resume and the job description for that category.
+                            2. If the resume demonstrates strong alignment with the job description for the category, precede the category with a checkmark (✔️).
+                            3. If the resume demonstrates poor alignment with the job description for the category, precede the category with a warning symbol (⚠️).
+                            4. When determining the Assessment use these guidelines: "Strong" means a very high level of compatibility, "Moderate" means some compatibility, and "Poor" means low or no compatibility.
+                            Provide the output in a markdown table format. The table should have four columns: 'Category', 'Job Description Highlights', 'Resume Alignment', and 'Assessment'.
+                            The first row of the table should be the header row with the column names:
+                            For the 'Category' column, list the categories (both core and additional), each preceded by the appropriate symbol (✔️ or ⚠️) as described above.
+                            For the 'Job Description Highlights' column, extract key requirements and responsibilities from the job description provided. Keep the descriptions **very brief and to the point**, focusing on the essential keywords. Do not exceed 15 words.
+                            For the 'Resume Alignment' column, provide a **concise and descriptive analysis** of how the resume aligns with the corresponding job description highlight. Focus on the key strengths and relevant experience. Keep the descriptions **very brief and to the point**. Do not exceed 15 words.
+                            For the 'Assessment' column, use one of these values: 'Strong', 'Good', 'Moderate'.
+                            Here are the inputs:
+                            JD:{jd}
+                            Resume:{text}
+                            Output the table in markdown format.
+                        """
+                    }
+
+                    # Generate match_response
+                    prompt = input_prompts["match_response"].format(text=resume_text, jd=selected_role)
+                    self.session_state["match_response"] = get_gemini_response(prompt, resume_text, selected_role)
                     
-                    # Use existing match_response and roadmap if available
-                    if existing_record[1] and existing_record[2]:
-                        self.session_state["match_response"] = existing_record[1]
-                        self.session_state["roadmap"] = existing_record[2]
-                        conn.commit()
-                        conn.close()
-                        st.success("✅ Application submitted successfully!")
-                        return
-                else:
-                    # Insert a new record if it doesn't exist
+                    # Generate roadmap using the dedicated function
+                    self.session_state["roadmap"] = generate_roadmap_for_candidate(resume_text, selected_role)
+
                     cursor.execute(
-                        "INSERT INTO resumes (candidate_profile_id, job_role, application_date, has_applied) VALUES (?, ?, ?, ?)",
-                        (self.session_state["user_id"], selected_role, datetime.datetime.now(), 1),
+                        "UPDATE resumes SET match_response = ?, roadmap = ? WHERE candidate_profile_id = ? AND job_role = ?",
+                        (
+                            self.session_state["match_response"],
+                            self.session_state["roadmap"],
+                            self.session_state["user_id"],
+                            selected_role,
+                        ),
                     )
 
-                # Generate match_response and roadmap
-                input_prompts = {
-                    "match_response": """
-                        You are an AI assistant designed to analyze resumes against job descriptions.
-                        Analyze the following resume and job description.
-                        Evaluate the resume based on the following core categories:
-                        * Core Skills
-                        * Education
-                        * Industry Experience
-                        * Projects
-                        In addition to these core categories, identify 2-3 more categories that are highly relevant to this specific job description. Examples of additional categories include: AI/ML Development, Application of AI/ML, Deployment, Key Strengths, Areas for Focus, Communication Skills, Leadership Experience, Research Experience, etc.
-                        For each identified category (both core and additional):
-                        1. Assess the strength of alignment between the resume and the job description for that category.
-                        2. If the resume demonstrates strong alignment with the job description for the category, precede the category with a checkmark (✔️).
-                        3. If the resume demonstrates poor alignment with the job description for the category, precede the category with a warning symbol (⚠️).
-                        4. When determining the Assessment use these guidelines: "Strong" means a very high level of compatibility, "Moderate" means some compatibility, and "Poor" means low or no compatibility.
-                        Provide the output in a markdown table format. The table should have four columns: 'Category', 'Job Description Highlights', 'Resume Alignment', and 'Assessment'.
-                        The first row of the table should be the header row with the column names:
-                        For the 'Category' column, list the categories (both core and additional), each preceded by the appropriate symbol (✔️ or ⚠️) as described above.
-                        For the 'Job Description Highlights' column, extract key requirements and responsibilities from the job description provided. Keep the descriptions **very brief and to the point**, focusing on the essential keywords. Do not exceed 15 words.
-                        For the 'Resume Alignment' column, provide a **concise and descriptive analysis** of how the resume aligns with the corresponding job description highlight. Focus on the key strengths and relevant experience. Keep the descriptions **very brief and to the point**. Do not exceed 15 words.
-                        For the 'Assessment' column, use one of these values: 'Strong', 'Good', 'Moderate'.
-                        Here are the inputs:
-                        JD:{jd}
-                        Resume:{text}
-                        Output the table in markdown format.
-                    """
-                }
+                    conn.commit()
+                    st.success("✅ Application submitted successfully!")
 
-                # Generate match_response
-                prompt = input_prompts["match_response"].format(text=resume_text, jd=selected_role)
-                self.session_state["match_response"] = get_gemini_response(prompt, resume_text, selected_role)
-                
-                # Generate roadmap using the dedicated function
-                self.session_state["roadmap"] = generate_roadmap_for_candidate(resume_text, selected_role)
-
-                cursor.execute(
-                    "UPDATE resumes SET match_response = ?, roadmap = ? WHERE candidate_profile_id = ? AND job_role = ?",
-                    (
-                        self.session_state["match_response"],
-                        self.session_state["roadmap"],
-                        self.session_state["user_id"],
-                        selected_role,
-                    ),
-                )
-
-                conn.commit()
-                conn.close()
-
-                st.success("✅ Application submitted successfully!")
+                finally:
+                    conn.close()
 
             except FileNotFoundError:
                 st.error("❌ Resume file not found.")

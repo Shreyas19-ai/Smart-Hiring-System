@@ -8,12 +8,12 @@ genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 def calculate_similarity_score(resume_text, job_description, job_requirements=None):
     """
-    Calculate a multi-factor similarity score between a resume and a job description.
+    Calculate the contextual similarity score between a resume and a job description.
     """
     try:
-        # Step 1: Semantic Similarity - Keep this as it's working well
+        # Define the prompt for contextual similarity evaluation
         prompt = f"""
-        Evaluate the semantic similarity between the following two texts and provide a similarity score between 0 and 100:
+        Evaluate the contextual similarity between the following two texts and provide a similarity score between 0 and 100:
         
         Resume:
         {resume_text}
@@ -21,63 +21,14 @@ def calculate_similarity_score(resume_text, job_description, job_requirements=No
         Job Description:
         {job_description}
         
-        Provide only the similarity score as a number.
+        Provide only the similarity score as a  between 0 - 100.
         """
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-2.0-flash-lite')
         response = model.generate_content(prompt)
-        semantic_similarity = float(response.text.strip())
-        
-        # Step 2: Direct AI-based skill matching instead of keyword extraction
-        skills_prompt = f"""
-        Analyze the following resume and job description. Identify the skills mentioned in the job description 
-        and check if they appear in the resume. Return a score from 0 to 100 representing the percentage of 
-        required skills that are present in the resume.
-        
-        Resume:
-        {resume_text}
-        
-        Job Description:
-        {job_description}
-        
-        Provide only the skills match percentage as a number between 0 and 100.
-        """
-        
-        skills_response = model.generate_content(skills_prompt)
-        skills_match_score = float(skills_response.text.strip())
-        
-        # Step 3: Direct AI-based experience matching
-        experience_prompt = f"""
-        Analyze the following resume and job description. The job description may mention required years of experience.
-        Based on the resume, determine if the candidate meets the experience requirements.
-        
-        Resume:
-        {resume_text}
-        
-        Job Description:
-        {job_description}
-        
-        Return a score from 0 to 100:
-        - 100 if the candidate exceeds the required experience
-        - 75 if the candidate meets the required experience
-        - 50 if the candidate is slightly below the required experience
-        - 25 if the candidate has relevant experience but not enough
-        - 0 if the candidate has no relevant experience
-        
-        Provide only the score as a number.
-        """
-        
-        experience_response = model.generate_content(experience_prompt)
-        experience_score = float(experience_response.text.strip())
-        
-        # Step 4: Final Weighted Score - adjusted weights to emphasize skills and semantic similarity
-        # Removed education component and redistributed weights
-        final_score = (0.5 * semantic_similarity) + (0.35 * skills_match_score) + (0.15 * experience_score)
-        
-        return round(final_score, 2)
+        return float(response.text.strip())
     except Exception as e:
-        print(f"Error calculating similarity score: {e}")
-        return 0        
-        
+        print(f"Error calculating contextual similarity score: {e}")
+        return 0
 
 def summarize_job_description(job_description):
     """
@@ -90,7 +41,7 @@ def summarize_job_description(job_description):
         {job_description}
         """
         # Use the Gemini API to generate the summary
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-2.0-flash-lite')
         response = model.generate_content(prompt)
         
         # Extract and return the summary
@@ -103,12 +54,12 @@ def summarize_job_description(job_description):
 # Similarity for personalized job recommendations
 def calculate_similarity_score_simple(resume_text, job_description):
     """
-    Calculate the semantic similarity score between a resume and a job description using a prompt-based approach with the Gemini API.
+    Calculate the contextual similarity score between a resume and a job description.
     """
     try:
-        # Define the prompt for similarity evaluation
+        # Define the prompt for contextual similarity evaluation
         prompt = f"""
-        Evaluate the semantic similarity between the following two texts and provide a similarity score between 0 and 100:
+        Evaluate the contextual similarity between the following two texts and provide a similarity score between 0 and 100:
         
         Resume:
         {resume_text}
@@ -116,19 +67,36 @@ def calculate_similarity_score_simple(resume_text, job_description):
         Job Description:
         {job_description}
         
-        Provide only the similarity score as a number.
+        Provide only the similarity score as a number between 0 - 100.
         """
-        
-        # Use the Gemini API to generate the similarity score
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-2.0-flash-lite')
         response = model.generate_content(prompt)
-        print(f"Gemini API Response: {response}")
-        
-        # Extract the similarity score from the response
-        similarity_score = float(response.text.strip())
-        print(f"Gemini API Similarity Score: {similarity_score}")
-        
-        return round(similarity_score, 2)
+        return float(response.text.strip())
     except Exception as e:
-        print(f"Error calculating semantic similarity score: {e}")
+        print(f"Error calculating contextual similarity score: {e}")
         return 0
+
+def format_name(raw_name):
+    """
+    Format the raw name by removing underscores and unique identifiers.
+    """
+    try:
+        # Check if the name contains an underscore
+        if '_' in raw_name:
+            # Split by the last underscore to preserve compound names
+            name_parts = raw_name.rsplit('_', 1)
+            
+            # If the last part looks like a UUID (alphanumeric and 8 chars), remove it
+            if len(name_parts) > 1 and len(name_parts[1]) == 8 and name_parts[1].isalnum():
+                formatted_name = name_parts[0]
+            else:
+                # If it doesn't look like a UUID, join with space
+                formatted_name = ' '.join(name_parts)
+                
+            return formatted_name.title()
+        else:
+            # If no underscore, just return the name as is
+            return raw_name.title()
+    except Exception as e:
+        print(f"Error formatting name: {e}")
+        return raw_name

@@ -14,8 +14,12 @@ def initialize_db():
     print(f"Database file: {os.path.abspath(db_file)}")
     new_db = not os.path.exists(db_file)
 
-    conn = sqlite3.connect(db_file, check_same_thread=False)
+    # Set a timeout to handle database locks
+    conn = sqlite3.connect(db_file, check_same_thread=False, timeout=30)
     cursor = conn.cursor()
+
+    # Enable Write-Ahead Logging (WAL) mode for better concurrency
+    cursor.execute("PRAGMA journal_mode=WAL;")
 
     if new_db:
         # Create users table

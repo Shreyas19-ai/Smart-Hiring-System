@@ -8,6 +8,7 @@ import base64
 from database import initialize_db, hire_candidate
 from utils import calculate_similarity_score
 from pdf_processor import input_pdf_text
+from utils import format_name
 from ai_response import parse_roadmap, generate_roadmap_for_candidate
 from candidate_ui import CandidateUI 
 
@@ -346,14 +347,17 @@ class HRUI:
         candidate_options = {"Select a Candidate": None}  # Add placeholder option
         for candidate in candidates:
             user_id, full_name, email, similarity_score, resume_path = candidate
+            # Format the name properly using the format_name function
+            formatted_name = format_name(full_name)
+            
             if similarity_score is not None and similarity_score >= threshold:  # Apply threshold filter
                 results.append({
-                    "Name": full_name,
+                    "Name": formatted_name,
                     "Email": email,
                     "Similarity Score": f"{similarity_score:.2f}%" if similarity_score is not None else "N/A",
                     "Resume Path": resume_path
                 })
-                candidate_options[f"{full_name} ({email})"] = user_id
+                candidate_options[f"{formatted_name} ({email})"] = user_id
 
         if results:
             st.success(f"Found {len(results)} candidates for the role '{self.selected_job_role}' above the threshold of {threshold}%.")
@@ -374,6 +378,7 @@ class HRUI:
 
 
     def handle_screen_resumes(self):
+        # Add import at the top of the fil   
         if st.button("Start Screening"):
             self.clear_session_state()
             with st.spinner("Processing Resumes..."):
@@ -397,9 +402,12 @@ class HRUI:
                 for i, result in enumerate(ranked_resumes):
                     full_name, email, similarity_score, resume_path = result  # Unpack tuple
                     if similarity_score is not None and similarity_score >= threshold:  # Apply threshold filter
+                        # Format the name properly using the format_name function
+                        formatted_name = format_name(full_name)
+                        
                         candidate_data = {
                             "Index": i + 1,
-                            "Name": full_name,
+                            "Name": formatted_name,
                             "Email": f'<a href="mailto:{email}">{email}</a>',
                             "Score": f"{similarity_score:.2f}%" if similarity_score is not None else "N/A",
                         }
@@ -409,7 +417,8 @@ class HRUI:
                             try:
                                 with open(resume_path, "rb") as f:
                                     b64 = base64.b64encode(f.read()).decode()
-                                candidate_data["Resume"] = f'<a href="data:application/octet-stream;base64,{b64}" download="resume_{full_name}.pdf">📝</a>'
+                                # Use formatted name for the download filename
+                                candidate_data["Resume"] = f'<a href="data:application/octet-stream;base64,{b64}" download="resume_{formatted_name}.pdf">📝</a>'
                             except FileNotFoundError:
                                 candidate_data["Resume"] = "File not found"
                             except Exception as e:
@@ -425,7 +434,7 @@ class HRUI:
                     df = df[["Index", "Name", "Email", "Score", "Resume"]]
                     st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
                 else:
-                    st.warning("No candidates meet the threshold of {threshold}% .")
+                    st.warning(f"No candidates meet the threshold of {threshold}%.")
 
 
     def handle_view_analysis(self):
@@ -453,14 +462,17 @@ class HRUI:
             candidate_data = []
             if results:
                 for full_name, candidate_profile_id, evaluation, is_employee in results:  # Unpack all values
+                    # Format the name properly using format_name function
+                    formatted_name = format_name(full_name)
+                    
                     if evaluation:
                         name_match = re.search(r"\| Name \| (.+?) \|", evaluation)  # Extract name from evaluation
                         if name_match:
-                            candidate_data.append((name_match.group(1).strip(), candidate_profile_id, is_employee))
+                            candidate_data.append((formatted_name, candidate_profile_id, is_employee))
                         else:
-                            candidate_data.append((full_name, candidate_profile_id, is_employee))  # Fallback to full_name
+                            candidate_data.append((formatted_name, candidate_profile_id, is_employee))  # Use formatted name
                     else:
-                        candidate_data.append((full_name, candidate_profile_id, is_employee))  # Fallback to full_name
+                        candidate_data.append((formatted_name, candidate_profile_id, is_employee))  # Use formatted name
 
             if candidate_data:
                 # Unpack the data including employee status
