@@ -34,7 +34,7 @@ The **AI-Powered Smart Hiring System** is an innovative platform designed to sim
    - Analyze applied candidates without going through their entire resumes.
    - Provides explainable AI (XAI) insights for better decision-making.
 4. **Personalized Training Roadmaps**:
-   - Generate AI-powered learning roadmaps for candidates to bridge skill gaps.
+   - Generate AI-powered learning roadmaps for Employees to bridge skill gaps.
    - Includes free and paid course recommendations.
 5. **Post Job Openings**:
    - Add new job roles and descriptions to the system.
