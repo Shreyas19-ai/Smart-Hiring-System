@@ -164,7 +164,10 @@ class HRUI:
         
         # Display dropdown to select a candidate if roadmaps have been generated
         if "candidate_roadmaps" in self.session_state and self.session_state["candidate_roadmaps"]:
-            candidate_options = {data["name"]: candidate_id for candidate_id, data in self.session_state["candidate_roadmaps"].items()}
+            candidate_options = {
+                format_name(data["name"]): candidate_id  # Use format_name to clean up names
+                for candidate_id, data in self.session_state["candidate_roadmaps"].items()
+            }
             selected_candidate_name = st.selectbox("Select to View Roadmap", list(candidate_options.keys()))
             
             if selected_candidate_name:
@@ -399,7 +402,7 @@ class HRUI:
 
                 threshold = 0
                 new_ranked_resumes = []
-                for i, result in enumerate(ranked_resumes):
+                for i, result in ranked_resumes:
                     full_name, email, similarity_score, resume_path = result  # Unpack tuple
                     if similarity_score is not None and similarity_score >= threshold:  # Apply threshold filter
                         # Format the name properly using the format_name function
